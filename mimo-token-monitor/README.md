@@ -5,6 +5,8 @@
 ## 功能
 
 - 桌面悬浮窗实时显示 Token Plan 用量（已用/总额度/剩余）
+- 根据套餐总额自动匹配挡位（Lite/Standard/Pro/Max），显示已用额度折合金额
+- 余额为 0 时自动隐藏余额显示
 - 自动读取小米平台 API 获取真实数据
 - 进度条颜色随用量变化（绿→黄→红）
 - 根据消耗速率估算剩余可用天数
@@ -34,7 +36,7 @@ python main.py
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py
+python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py ; Remove-Item -Recurse -Force build\ ; Remove-Item -Force MiMo-Token-Monitor.spec
 ```
 
 ## 操作

@@ -15,9 +15,9 @@ pip install -r requirements.txt
 # 运行
 python main.py
 
-# 打包 exe
+# 打包 exe（自动清理临时文件）
 pip install pyinstaller
-pyinstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py
+python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py ; Remove-Item -Recurse -Force build\ ; Remove-Item -Force MiMo-Token-Monitor.spec
 ```
 
 无测试、无 lint 配置。
@@ -39,3 +39,5 @@ pyinstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --
 - 窗口 `FramelessWindowHint` + `WindowStaysOnTopHint`，通过 `mouseMoveEvent` 实现拖动，拖动时有屏幕边缘吸附逻辑。
 - API 认证依赖用户手动从浏览器 DevTools 复制 Cookie。
 - 平台目标为 Windows（字体 `Microsoft YaHei`，`.ico` 图标）。
+- 内置 `PLAN_TIERS` 常量（4 个挡位：Lite ¥39 / Standard ¥99 / Pro ¥329 / Max ¥659），通过 `_get_plan_tier_info()` 根据套餐总额自动匹配挡位并计算每 Credit 单价，在悬浮窗内显示已用额度折合金额。
+- 当余额为 0 时，悬浮窗自动隐藏余额显示（包括右上角金额和 tooltip 中的余额行）。
