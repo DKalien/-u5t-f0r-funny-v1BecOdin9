@@ -60,7 +60,7 @@ PLAN_TIERS = [
 
 def _get_plan_tier_info(total: int):
     """Return (tier_name, monthly_price, cost_per_credit) based on total plan tokens."""
-    for credits, name, price in PLAN_TIERS:
+    for credits, name, price in sorted(PLAN_TIERS, reverse=True):
         if total >= credits * 0.95:
             return name, price, price / credits
     return None, None, None
