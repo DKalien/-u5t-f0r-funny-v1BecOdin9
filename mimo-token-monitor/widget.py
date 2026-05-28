@@ -10,6 +10,8 @@ import json
 import api_client
 from config import save_config
 
+SNAP_THRESHOLD = 15  # px, 距屏幕边缘多少像素内触发吸附
+
 # ── Colors ──────────────────────────────────────────────────────
 BG_COLOR = QColor(30, 30, 30, 220)
 TEXT_COLOR = QColor(230, 230, 230)
@@ -252,7 +254,27 @@ class TokenWidget(QWidget):
 
     def mouseMoveEvent(self, e):
         if e.buttons() & Qt.MouseButton.LeftButton:
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
+            new_pos = e.globalPosition().toPoint() - self._drag_pos
+
+            screen = QApplication.screenAt(e.globalPosition().toPoint())
+            if screen:
+                geo = screen.availableGeometry()
+                w, h = self.width(), self.height()
+                x, y = new_pos.x(), new_pos.y()
+
+                if x < geo.left() + SNAP_THRESHOLD:
+                    x = geo.left()
+                elif x + w > geo.right() - SNAP_THRESHOLD:
+                    x = geo.right() - w
+
+                if y < geo.top() + SNAP_THRESHOLD:
+                    y = geo.top()
+                elif y + h > geo.bottom() - SNAP_THRESHOLD:
+                    y = geo.bottom() - h
+
+                new_pos = QPoint(x, y)
+
+            self.move(new_pos)
             e.accept()
 
     def mouseReleaseEvent(self, e):
