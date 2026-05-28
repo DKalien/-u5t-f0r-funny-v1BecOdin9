@@ -49,6 +49,23 @@ def _fmt_money(v) -> str:
     return f"¥{float(v):.2f}"
 
 
+# ── Plan tier definitions ──────────────────────────────────────
+PLAN_TIERS = [
+    (82_000_000_000, "Max", 659),
+    (38_000_000_000, "Pro", 329),
+    (11_000_000_000, "Standard", 99),
+    (4_100_000_000, "Lite", 39),
+]
+
+
+def _get_plan_tier_info(total: int):
+    """Return (tier_name, monthly_price, cost_per_credit) based on total plan tokens."""
+    for credits, name, price in sorted(PLAN_TIERS, reverse=True):
+        if total >= credits * 0.95:
+            return name, price, price / credits
+    return None, None, None
+
+
 # ── Probe thread ────────────────────────────────────────────────
 class FetchWorker(QThread):
     finished = pyqtSignal(dict, dict)
@@ -169,7 +186,7 @@ class TokenWidget(QWidget):
         p.drawText(16, 22, "MiMo Token")
 
         # Balance on the right
-        if self._balance is not None:
+        if self._balance is not None and self._balance != 0:
             p.setPen(QPen(ACCENT_GREEN))
             p.drawText(150, 22, _fmt_money(self._balance))
 
@@ -194,12 +211,16 @@ class TokenWidget(QWidget):
             p.setPen(QPen(TEXT_COLOR))
             p.drawText(16, 80, f"{_fmt_tokens(self._plan_used)} / {_fmt_tokens(self._plan_total)}")
             remaining = self._plan_total - self._plan_used
-            p.drawText(16, 96, f"剩余: {_fmt_tokens(max(0, remaining))}")
+            p.drawText(100, 66, 144, 16,
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       f"剩余: {_fmt_tokens(max(0, remaining))}")
 
-            if self._month_limit > 0:
-                m_pct = self._month_used / self._month_limit * 100
-                p.setPen(QPen(DIM))
-                p.drawText(150, 96, f"本月: {m_pct:.1f}%")
+            plan_name, price, cost_per_credit = _get_plan_tier_info(self._plan_total)
+            if cost_per_credit:
+                used_cost = self._plan_used * cost_per_credit
+                p.drawText(16, 82, 228, 16,
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                           f"{plan_name} 套餐 ¥{used_cost:.2f} / ¥{price}")
 
             # Estimated days remaining
             remaining = self._plan_total - self._plan_used
@@ -226,7 +247,7 @@ class TokenWidget(QWidget):
                 p.setPen(QPen(DIM))
                 p.drawText(140, 96, f"本月: ¥{self._payg_month_cost}")
 
-        elif self._balance is not None:
+        elif self._balance is not None and self._balance != 0:
             p.drawText(16, 50, f"余额: {_fmt_money(self._balance)}")
             p.setPen(QPen(DIM))
             p.drawText(16, 70, "暂无用量数据")
@@ -391,7 +412,7 @@ class TokenWidget(QWidget):
 
     def _update_tooltip(self, bal_result, usage_result):
         lines = []
-        if self._balance is not None:
+        if self._balance is not None and self._balance != 0:
             lines.append(f"余额: {_fmt_money(self._balance)}")
         if self._plan_total > 0:
             pct = self._plan_used / self._plan_total * 100
@@ -400,6 +421,10 @@ class TokenWidget(QWidget):
             lines.append(f"已用: {_fmt_tokens(self._plan_used)}")
             lines.append(f"总额: {_fmt_tokens(self._plan_total)}")
             lines.append(f"剩余: {_fmt_tokens(max(0, remaining))}")
+            _, _, cost_per_credit = _get_plan_tier_info(self._plan_total)
+            if cost_per_credit:
+                used_cost = self._plan_used * cost_per_credit
+                lines.append(f"已用折合 ≈ ¥{used_cost:.2f}")
             # Estimate days remaining at current burn rate
             if self._month_used > 0 and self._month_limit > 0:
                 from datetime import datetime
