@@ -64,8 +64,6 @@ def _get_plan_tier_info(total: int):
         if total >= credits * 0.95:
             return name, price, price / credits
     return None, None, None
-
-
 # ── Probe thread ────────────────────────────────────────────────
 class FetchWorker(QThread):
     finished = pyqtSignal(dict, dict)
