@@ -15,6 +15,9 @@ pip install -r requirements.txt
 # 运行
 python main.py
 
+# HUD 同步（已集成到 claude-hud 插件，自动触发；也可手动运行）
+python mimo_hud_sync.py
+
 # 打包 exe（自动清理临时文件）
 pip install pyinstaller
 python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py ; Remove-Item -Recurse -Force build\ ; Remove-Item -Force MiMo-Token-Monitor.spec
@@ -24,12 +27,13 @@ python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=i
 
 ## 架构
 
-4 个 Python 模块，单目录扁平结构：
+5 个 Python 模块 + 1 个同步脚本，单目录扁平结构：
 
 - **main.py** — 入口。创建 `QApplication`，加载配置，首次运行无 Cookie 时弹出 `SettingsDialog`，然后启动 `TokenWidget`。
 - **config.py** — 配置管理。JSON 文件存储于 `~/.mimo-widget/config.json`，字段：`cookie`、`refresh_interval`（默认 300s）、`opacity`（默认 0.85）、`position`。
 - **api_client.py** — API 客户端。`fetch_balance()` 和 `fetch_usage()` 两个函数。`fetch_usage()` 会依次尝试多个 endpoint 直到成功。
 - **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、右键菜单、定时刷新、数据解析、tooltip）。
+- **mimo_hud_sync.py** — claude-hud 集成脚本。复用 `api_client.py` 获取 MiMo 数据，写入 `~/.mimo-widget/hud-usage-snapshot.json`（claude-hud 的 external usage snapshot 格式）。已通过 `externalSyncCmd` 配置集成到 claude-hud 插件，HUD 渲染时自动触发同步（snapshot 过期时才执行）。
 
 数据流：`main.py` → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制。
 
