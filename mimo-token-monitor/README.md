@@ -52,6 +52,16 @@ python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=i
 - 直接调用小米平台 REST API（`/api/v1/tokenPlan/usage`）
 - Cookie 认证，数据纯本地存储
 
+## claude-hud 集成
+
+可将 MiMo 套餐用量（进度条 + 余额）显示在 Claude Code 的状态栏中。一键安装：
+
+```bash
+python setup_hud.py
+```
+
+详见 [HUD_SETUP.md](HUD_SETUP.md)。
+
 ## 隐私
 
 - 纯本地运行，无第三方服务器
