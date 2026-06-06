@@ -12,6 +12,7 @@
 - 根据消耗速率估算剩余可用天数
 - 支持按量付费用量查询
 - 可拖动、半透明、置顶显示
+- **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 
 ## 使用方式
 
@@ -51,6 +52,39 @@ python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=i
 - Python + PyQt6
 - 直接调用小米平台 REST API（`/api/v1/tokenPlan/usage`）
 - Cookie 认证，数据纯本地存储
+
+## Claude HUD 集成
+
+本程序可以为 [claude-hud](https://github.com/DKalien/claude-hud) 生成用量快照，在 Claude Code 状态栏显示 MIMO 用量。
+
+### 配置步骤
+
+1. 在本程序的设置中，填写**快照路径**：
+   ```
+   ~/.claude/plugins/claude-hud/mimo-snapshot.json
+   ```
+   Windows 完整路径示例：`C:\Users\你的用户名\.claude\plugins\claude-hud\mimo-snapshot.json`
+
+2. 在 claude-hud 配置中启用 MIMO 显示（`~/.claude/plugins/claude-hud/config.json`）：
+   ```json
+   {
+     "display": {
+       "showMimoUsage": true,
+       "mimoSnapshotPath": "~/.claude/plugins/claude-hud/mimo-snapshot.json"
+     }
+   }
+   ```
+
+3. 重启 Claude Code，HUD 会显示：
+   ```
+   Context ███░░░░░░░ 29% │ Usage ██░░░░░░░░ 25% │ MIMO ██░░░░░░░░ 2% │ 1.9B / 82.0B
+   ```
+
+### 工作原理
+
+- 本程序每次刷新数据时，自动写入快照 JSON 文件
+- claude-hud 每 ~300ms 读取快照并显示
+- 本程序关闭后，快照不再更新，claude-hud 在快照过期后停止显示 MIMO
 
 ## 隐私
 

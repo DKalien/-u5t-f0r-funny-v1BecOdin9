@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 import api_client
 from config import save_config
+import snapshot_writer
 
 SNAP_THRESHOLD = 15  # px, 距屏幕边缘多少像素内触发吸附
 
@@ -105,7 +106,11 @@ class SettingsDialog(QDialog):
         self.opacity_spin.setValue(cfg.get("opacity", 0.85))
         layout.addRow("透明度:", self.opacity_spin)
 
-        hint = QLabel("获取 Cookie: 浏览器打开 platform.xiaomimimo.com 并登录 →\nF12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头")
+        self.snapshot_edit = QLineEdit(cfg.get("snapshot_path", ""))
+        self.snapshot_edit.setPlaceholderText("留空禁用 | 例: ~/.claude/plugins/claude-hud/mimo-snapshot.json")
+        layout.addRow("快照路径:", self.snapshot_edit)
+
+        hint = QLabel("获取 Cookie: 浏览器打开 platform.xiaomimimo.com 并登录 →\nF12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addRow(hint)
@@ -123,6 +128,7 @@ class SettingsDialog(QDialog):
         self.cfg["cookie"] = self.cookie_edit.text().strip()
         self.cfg["refresh_interval"] = self.interval_spin.value()
         self.cfg["opacity"] = self.opacity_spin.value()
+        self.cfg["snapshot_path"] = self.snapshot_edit.text().strip()
         return self.cfg
 
 
@@ -360,6 +366,7 @@ class TokenWidget(QWidget):
 
         self._last_update = datetime.now().strftime("%H:%M:%S")
         self._update_tooltip(bal_result, usage_result)
+        self._write_snapshot()
         self.update()
 
     def _parse_plan(self, data):
@@ -438,6 +445,23 @@ class TokenWidget(QWidget):
         if self._last_error:
             lines.append(f"错误: {self._last_error}")
         self.setToolTip("\n".join(lines))
+
+    # ── Snapshot ─────────────────────────────────────────────────
+    def _write_snapshot(self):
+        """Write usage snapshot for claude-hud to read."""
+        snapshot_path = self.cfg.get("snapshot_path", "")
+        if not snapshot_path:
+            return
+
+        snapshot_writer.write_snapshot(
+            snapshot_path=snapshot_path,
+            balance=self._balance,
+            plan_used=self._plan_used,
+            plan_total=self._plan_total,
+            month_used=self._month_used,
+            month_limit=self._month_limit,
+            error=self._last_error if self._last_error else None,
+        )
 
     # ── Actions ─────────────────────────────────────────────────
     def _open_settings(self):

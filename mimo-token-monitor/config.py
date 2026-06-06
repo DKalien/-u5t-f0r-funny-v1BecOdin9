@@ -6,6 +6,7 @@ DEFAULT_CONFIG = {
     "refresh_interval": 300,
     "opacity": 0.85,
     "position": [100, 100],
+    "snapshot_path": "",  # Path for claude-hud snapshot (empty = disabled)
 }
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".mimo-widget")
