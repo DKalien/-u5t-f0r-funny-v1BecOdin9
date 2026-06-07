@@ -1,9 +1,9 @@
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint
-from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont
+from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QMenu, QDialog, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton,
-    QHBoxLayout, QLabel, QMessageBox, QApplication,
+    QHBoxLayout, QLabel, QMessageBox, QApplication, QSystemTrayIcon,
 )
 from datetime import datetime
 import json
@@ -160,6 +160,7 @@ class TokenWidget(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
         self.setFixedWidth(260)
         self.setFixedHeight(140)
         pos = cfg.get("position", [100, 100])
@@ -171,7 +172,46 @@ class TokenWidget(QWidget):
         interval_ms = cfg.get("refresh_interval", 300) * 1000
         self._timer.start(interval_ms)
 
+        # 系统托盘
+        self._setup_tray()
+
         QTimer.singleShot(500, self._do_fetch)
+
+    def _setup_tray(self):
+        """Initialize system tray icon and menu."""
+        import os, sys
+        # 兼容 PyInstaller 打包后的路径
+        base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        icon_path = os.path.join(base_path, "icon.ico")
+        if os.path.exists(icon_path):
+            self._tray_icon = QSystemTrayIcon(QIcon(icon_path), self)
+        else:
+            self._tray_icon = QSystemTrayIcon(self)
+
+        # 托盘右键菜单
+        tray_menu = QMenu()
+
+        show_act = QAction("显示主窗口", self)
+        show_act.triggered.connect(self._show_window)
+        tray_menu.addAction(show_act)
+
+        refresh_act = QAction("刷新", self)
+        refresh_act.triggered.connect(self._do_fetch)
+        tray_menu.addAction(refresh_act)
+
+        tray_menu.addSeparator()
+
+        quit_act = QAction("退出", self)
+        quit_act.triggered.connect(self._quit_app)
+        tray_menu.addAction(quit_act)
+
+        self._tray_icon.setContextMenu(tray_menu)
+        self._tray_icon.setToolTip("MiMo Token Monitor")
+
+        # 双击托盘图标显示/隐藏窗口
+        self._tray_icon.activated.connect(self._on_tray_activated)
+
+        self._tray_icon.show()
 
     # ── Painting ────────────────────────────────────────────────
     def paintEvent(self, _event):
@@ -193,6 +233,9 @@ class TokenWidget(QWidget):
         if self._balance is not None and self._balance != 0:
             p.setPen(QPen(ACCENT_GREEN))
             p.drawText(150, 22, _fmt_money(self._balance))
+
+        # 最小化按钮（右上角 ─ 符号）
+        self._minimize_btn_rect = self._draw_minimize_button(p)
 
         # Plan info
         font_small = QFont("Microsoft YaHei", 9)
@@ -271,9 +314,37 @@ class TokenWidget(QWidget):
 
         p.end()
 
+    def _draw_minimize_button(self, p: QPainter):
+        """绘制右上角最小化按钮，返回按钮区域 QRect。"""
+        from PyQt6.QtCore import QRect
+        btn_size = 20
+        btn_margin = 8
+        btn_x = self.width() - btn_size - btn_margin
+        btn_y = btn_margin
+        btn_rect = QRect(btn_x, btn_y, btn_size, btn_size)
+
+        # 按钮背景（悬停时高亮）
+        mouse_pos = self.mapFromGlobal(self.cursor().pos())
+        hovered = btn_rect.contains(mouse_pos)
+        p.setBrush(QBrush(QColor(255, 255, 255, 40) if hovered else QColor(255, 255, 255, 20)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(btn_rect, 4, 4)
+
+        # 绘制 ─ 符号
+        p.setPen(QPen(QColor(200, 200, 200)))
+        line_y = btn_y + btn_size // 2
+        p.drawLine(btn_x + 5, line_y, btn_x + btn_size - 5, line_y)
+
+        return btn_rect
+
     # ── Mouse events ────────────────────────────────────────────
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            # 检测是否点击最小化按钮
+            if hasattr(self, '_minimize_btn_rect') and self._minimize_btn_rect.contains(e.pos()):
+                self.close()
+                e.accept()
+                return
             self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
             e.accept()
 
@@ -301,6 +372,9 @@ class TokenWidget(QWidget):
 
             self.move(new_pos)
             e.accept()
+        else:
+            # 鼠标悬停时更新按钮高亮状态
+            self.update()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -309,6 +383,33 @@ class TokenWidget(QWidget):
 
     def mouseDoubleClickEvent(self, e):
         self._do_fetch()
+
+    def closeEvent(self, event):
+        """拦截关闭事件，最小化到系统托盘而非退出。"""
+        event.ignore()
+        self.hide()
+        self._tray_icon.showMessage(
+            "MiMo Token Monitor",
+            "程序已最小化到系统托盘，双击图标可恢复窗口。",
+            QSystemTrayIcon.MessageIcon.Information,
+            2000
+        )
+
+    def _on_tray_activated(self, reason):
+        """处理托盘图标点击事件。"""
+        if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
+            self._show_window()
+
+    def _show_window(self):
+        """显示并激活窗口。"""
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+
+    def _quit_app(self):
+        """真正退出应用程序。"""
+        self._tray_icon.hide()
+        QApplication.quit()
 
     def contextMenuEvent(self, e):
         menu = QMenu(self)
@@ -328,7 +429,7 @@ class TokenWidget(QWidget):
         menu.addSeparator()
 
         quit_act = QAction("退出", self)
-        quit_act.triggered.connect(QApplication.quit)
+        quit_act.triggered.connect(self._quit_app)
         menu.addAction(quit_act)
 
         menu.exec(e.globalPos())
@@ -444,7 +545,12 @@ class TokenWidget(QWidget):
             lines.append(f"本月: {_fmt_tokens(self._month_used)} / {_fmt_tokens(self._month_limit)} ({m_pct:.1f}%)")
         if self._last_error:
             lines.append(f"错误: {self._last_error}")
-        self.setToolTip("\n".join(lines))
+        tooltip_text = "\n".join(lines)
+        self.setToolTip(tooltip_text)
+        # 同步更新托盘图标 tooltip
+        if hasattr(self, '_tray_icon'):
+            # 系统托盘 tooltip 最长 128 字符（Windows 限制）
+            self._tray_icon.setToolTip(tooltip_text[:128] if len(tooltip_text) > 128 else tooltip_text)
 
     # ── Snapshot ─────────────────────────────────────────────────
     def _write_snapshot(self):

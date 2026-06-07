@@ -12,6 +12,8 @@
 - 根据消耗速率估算剩余可用天数
 - 支持按量付费用量查询
 - 可拖动、半透明、置顶显示
+- **系统托盘**：最小化到托盘，双击恢复，实时 tooltip
+- **单实例运行**：防止重复启动，重复运行时提示检查托盘
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 
 ## 使用方式
@@ -37,15 +39,20 @@ python main.py
 
 ```bash
 pip install pyinstaller
-python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py ; Remove-Item -Recurse -Force build\ ; Remove-Item -Force MiMo-Token-Monitor.spec
+python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --add-data "icon.ico;." --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py ; Remove-Item -Recurse -Force build\ ; Remove-Item -Force MiMo-Token-Monitor.spec ; Stop-Process -Name "MiMo-Token-Monitor" -Force -ErrorAction SilentlyContinue ; Copy-Item dist\MiMo-Token-Monitor.exe ([Environment]::GetFolderPath('Desktop')) -Force
 ```
 
 ## 操作
 
-- **拖动**：左键拖动窗口位置
-- **双击**：立即刷新数据
-- **右键菜单**：刷新 / 设置 / 查看原始数据 / 退出
-- **悬停**：显示详细 tooltip
+- **拖动**：左键拖动窗口位置（除最小化按钮区域外）
+- **双击悬浮窗**：立即刷新数据
+- **右键悬浮窗**：刷新 / 设置 / 查看原始数据 / 退出
+- **悬停悬浮窗**：显示详细 tooltip
+- **最小化按钮**：右上角 `─` 按钮，点击最小化到系统托盘
+- **系统托盘**：
+  - 双击托盘图标：恢复显示悬浮窗
+  - 右键托盘图标：显示主窗口 / 刷新 / 退出
+  - 悬停托盘图标：显示用量概览
 
 ## 技术栈
 
