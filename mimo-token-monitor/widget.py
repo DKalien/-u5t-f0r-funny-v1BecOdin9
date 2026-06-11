@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 import api_client
 from config import save_config
+import cookie_reader
 import snapshot_writer
 
 SNAP_THRESHOLD = 15  # px, 距屏幕边缘多少像素内触发吸附
@@ -84,14 +85,22 @@ class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MiMo Token 设置")
-        self.setFixedSize(500, 260)
+        self.setFixedSize(500, 290)
         self.cfg = dict(cfg)
 
         layout = QFormLayout(self)
 
         self.cookie_edit = QLineEdit(cfg.get("cookie", ""))
-        self.cookie_edit.setPlaceholderText("从浏览器 F12 → Application → Cookies 复制完整 cookie 字符串")
-        layout.addRow("Cookie:", self.cookie_edit)
+        self.cookie_edit.setPlaceholderText("手动粘贴或点击右侧按钮从浏览器自动导入")
+
+        import_btn = QPushButton("从浏览器导入")
+        import_btn.setFixedWidth(110)
+        import_btn.clicked.connect(self._import_cookie)
+
+        cookie_row = QHBoxLayout()
+        cookie_row.addWidget(self.cookie_edit)
+        cookie_row.addWidget(import_btn)
+        layout.addRow("Cookie:", cookie_row)
 
         self.interval_spin = QSpinBox()
         self.interval_spin.setRange(60, 3600)
@@ -110,7 +119,11 @@ class SettingsDialog(QDialog):
         self.snapshot_edit.setPlaceholderText("留空禁用 | 例: ~/.claude/plugins/claude-hud/mimo-snapshot.json")
         layout.addRow("快照路径:", self.snapshot_edit)
 
-        hint = QLabel("获取 Cookie: 浏览器打开 platform.xiaomimimo.com 并登录 →\nF12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量")
+        hint = QLabel(
+            "自动导入: Edge 快捷方式末尾加 --remote-debugging-port=9222 --remote-allow-origins=*，重启浏览器后点击按钮\n"
+            "手动导入: F12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n"
+            "快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量"
+        )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         layout.addRow(hint)
@@ -123,6 +136,31 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(ok_btn)
         btn_row.addWidget(cancel_btn)
         layout.addRow(btn_row)
+
+    def _import_cookie(self):
+        cookie_str, error = cookie_reader.import_cookie_from_browser()
+        if not cookie_str:
+            QMessageBox.warning(self, "导入失败", error or "无法从浏览器读取 Cookie")
+            return
+
+        # 验证 cookie 是否有效
+        result = api_client.fetch_balance(cookie_str)
+        if result["ok"]:
+            self.cookie_edit.setText(cookie_str)
+            QMessageBox.information(self, "导入成功", "Cookie 已从浏览器读取并验证有效")
+        elif "过期" in (result.get("error") or ""):
+            QMessageBox.warning(
+                self, "Cookie 已过期",
+                "浏览器中的 Cookie 也已过期，请先在浏览器中重新登录\n"
+                "platform.xiaomimimo.com，然后重试",
+            )
+        else:
+            # 网络错误等：仍然填入，让用户自行判断
+            self.cookie_edit.setText(cookie_str)
+            QMessageBox.warning(
+                self, "导入成功但验证失败",
+                f"Cookie 已读取，但验证时出错：{result.get('error', '未知错误')}\n已填入，请手动确认",
+            )
 
     def get_config(self) -> dict:
         self.cfg["cookie"] = self.cookie_edit.text().strip()

@@ -7,6 +7,7 @@
 - 桌面悬浮窗实时显示 Token Plan 用量（已用/总额度/剩余）
 - 根据套餐总额自动匹配挡位（Lite/Standard/Pro/Max），显示已用额度折合金额
 - 余额为 0 时自动隐藏余额显示
+- **一键导入 Cookie**：通过 CDP 自动从浏览器读取，无需手动复制
 - 自动读取小米平台 API 获取真实数据
 - 进度条颜色随用量变化（绿→黄→红）
 - 根据消耗速率估算剩余可用天数
@@ -22,7 +23,20 @@
 
 下载 `MiMo-Token-Monitor.exe`，双击运行。
 
-首次运行需要填入 Cookie：
+首次运行需要填入 Cookie。
+
+**方式一：一键导入（推荐）**
+
+1. 在 Edge 快捷方式「属性 → 目标」末尾添加（注意前面有空格）：
+   ```
+   --remote-debugging-port=9222 --remote-allow-origins=*
+   ```
+2. 关闭所有 Edge 窗口，从该快捷方式重新打开
+3. 浏览器打开 [platform.xiaomimimo.com](https://platform.xiaomimimo.com) 并登录
+4. 在程序设置中点击「从浏览器导入」按钮，自动读取并验证
+
+**方式二：手动复制**
+
 1. 浏览器打开 [platform.xiaomimimo.com](https://platform.xiaomimimo.com) 并登录
 2. 按 F12 → Network → 刷新页面 → 点任意请求
 3. 复制 Request Headers 中的 Cookie 值
@@ -58,7 +72,8 @@ python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=i
 
 - Python + PyQt6
 - 直接调用小米平台 REST API（`/api/v1/tokenPlan/usage`）
-- Cookie 认证，数据纯本地存储
+- Cookie 认证，支持 CDP（Chrome DevTools Protocol）自动导入
+- 数据纯本地存储
 
 ## Claude HUD 集成
 
