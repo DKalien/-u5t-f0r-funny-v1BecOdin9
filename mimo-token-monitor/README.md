@@ -53,19 +53,19 @@ python main.py
 
 ```bash
 pip install pyinstaller
-python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --add-data "icon.ico;." --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py ; Remove-Item -Recurse -Force build\ ; Remove-Item -Force MiMo-Token-Monitor.spec ; Stop-Process -Name "MiMo-Token-Monitor" -Force -ErrorAction SilentlyContinue ; Copy-Item dist\MiMo-Token-Monitor.exe ([Environment]::GetFolderPath('Desktop')) -Force
+python -m PyInstaller MiMo-Token-Monitor.spec --clean
 ```
 
 ## 操作
 
 - **拖动**：左键拖动窗口位置（除最小化按钮区域外）
 - **双击悬浮窗**：立即刷新数据
-- **右键悬浮窗**：刷新 / 设置 / 查看原始数据 / 退出
+- **右键悬浮窗**：刷新 / 从浏览器导入 / 设置 / 查看原始数据 / 退出
 - **悬停悬浮窗**：显示详细 tooltip
 - **最小化按钮**：右上角 `─` 按钮，点击最小化到系统托盘
 - **系统托盘**：
   - 双击托盘图标：恢复显示悬浮窗
-  - 右键托盘图标：显示主窗口 / 刷新 / 退出
+  - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / 退出
   - 悬停托盘图标：显示用量概览
 
 ## 技术栈

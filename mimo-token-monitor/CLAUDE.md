@@ -15,9 +15,9 @@ pip install -r requirements.txt
 # 运行
 python main.py
 
-# 打包 exe（自动清理临时文件并复制到桌面）
+# 打包 exe（使用 spec 文件，自动包含 icon.ico）
 pip install pyinstaller
-python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=icon.ico --add-data "icon.ico;." --hidden-import=PyQt6 --hidden-import=PyQt6.QtWidgets --hidden-import=PyQt6.QtCore --hidden-import=PyQt6.QtGui --hidden-import=PyQt6.sip main.py ; Remove-Item -Recurse -Force build\ ; Remove-Item -Force MiMo-Token-Monitor.spec ; Stop-Process -Name "MiMo-Token-Monitor" -Force -ErrorAction SilentlyContinue ; Copy-Item dist\MiMo-Token-Monitor.exe ([Environment]::GetFolderPath('Desktop')) -Force
+python -m PyInstaller MiMo-Token-Monitor.spec --clean
 ```
 
 无测试、无 lint 配置。
@@ -30,7 +30,7 @@ python -m PyInstaller --onefile --noconsole --name "MiMo-Token-Monitor" --icon=i
 - **config.py** — 配置管理。JSON 文件存储于 `~/.mimo-widget/config.json`，字段：`cookie`、`refresh_interval`（默认 300s）、`opacity`（默认 0.85）、`position`。
 - **api_client.py** — API 客户端。`fetch_balance()` 和 `fetch_usage()` 两个函数。`fetch_usage()` 会依次尝试多个 endpoint 直到成功。
 - **cookie_reader.py** — 浏览器 Cookie 自动读取。优先通过 CDP 从运行中的浏览器读取明文 Cookie（绕过 v20 加密），回退到 `browser_cookie3` 读取本地数据库。设置对话框「从浏览器导入」按钮调用此模块。
-- **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。
+- **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）。
 
 数据流：`main.py` → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制。
 

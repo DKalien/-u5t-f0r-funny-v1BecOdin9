@@ -237,6 +237,10 @@ class TokenWidget(QWidget):
         refresh_act.triggered.connect(self._do_fetch)
         tray_menu.addAction(refresh_act)
 
+        import_act = QAction("从浏览器导入", self)
+        import_act.triggered.connect(self._import_cookie_quick)
+        tray_menu.addAction(import_act)
+
         tray_menu.addSeparator()
 
         quit_act = QAction("退出", self)
@@ -456,6 +460,10 @@ class TokenWidget(QWidget):
         refresh_act.triggered.connect(self._do_fetch)
         menu.addAction(refresh_act)
 
+        import_act = QAction("从浏览器导入", self)
+        import_act.triggered.connect(self._import_cookie_quick)
+        menu.addAction(import_act)
+
         settings_act = QAction("设置", self)
         settings_act.triggered.connect(self._open_settings)
         menu.addAction(settings_act)
@@ -471,6 +479,38 @@ class TokenWidget(QWidget):
         menu.addAction(quit_act)
 
         menu.exec(e.globalPos())
+
+    # ── Import ──────────────────────────────────────────────────
+    def _import_cookie_quick(self):
+        """从浏览器快速导入 Cookie，自动保存并刷新数据。"""
+        cookie_str, error = cookie_reader.import_cookie_from_browser()
+        if not cookie_str:
+            QMessageBox.warning(self, "导入失败", error or "无法从浏览器读取 Cookie")
+            return
+
+        # 验证 cookie 是否有效
+        result = api_client.fetch_balance(cookie_str)
+        if result["ok"]:
+            # 保存到配置并刷新
+            self.cfg["cookie"] = cookie_str
+            save_config(self.cfg)
+            QMessageBox.information(self, "导入成功", "Cookie 已从浏览器读取并验证有效，正在刷新数据...")
+            self._do_fetch()
+        elif "过期" in (result.get("error") or ""):
+            QMessageBox.warning(
+                self, "Cookie 已过期",
+                "浏览器中的 Cookie 也已过期，请先在浏览器中重新登录\n"
+                "platform.xiaomimimo.com，然后重试",
+            )
+        else:
+            # 网络错误等：仍然保存，让用户自行判断
+            self.cfg["cookie"] = cookie_str
+            save_config(self.cfg)
+            QMessageBox.warning(
+                self, "导入成功但验证失败",
+                f"Cookie 已读取，但验证时出错：{result.get('error', '未知错误')}\n已保存，请手动确认",
+            )
+            self._do_fetch()
 
     # ── Fetch ───────────────────────────────────────────────────
     def _do_fetch(self):
