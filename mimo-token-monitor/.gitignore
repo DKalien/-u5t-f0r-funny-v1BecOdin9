@@ -1,7 +1,6 @@
 __pycache__/
 *.pyc
 build/
-dist/*
-!dist/*.exe
 *.spec
+!MiMo-Token-Monitor.spec
 .mimo-widget/
