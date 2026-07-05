@@ -11,7 +11,7 @@ a = Analysis(
         ('icon.ico', '.'),
         (os.path.join(os.path.dirname(certifi.__file__), 'cacert.pem'), 'certifi'),
     ],
-    hiddenimports=['certifi'],
+    hiddenimports=['certifi', 'websocket', 'browser_cookie3'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

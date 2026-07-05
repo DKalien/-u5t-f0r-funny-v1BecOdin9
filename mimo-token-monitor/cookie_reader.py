@@ -120,10 +120,13 @@ def import_cookie_from_browser() -> tuple[str | None, str | None]:
         (cookie_string, None) on success, (None, error_message) on failure.
     """
     # 1. Try CDP first (works with any encryption)
+    cdp_errors = []
     for port in _CDP_PORTS:
         cookie_str, err = _try_cdp(port)
         if cookie_str:
             return cookie_str, None
+        if err:
+            cdp_errors.append(f"端口 {port}: {err}")
 
     # 2. Fall back to browser_cookie3
     try:
@@ -133,8 +136,10 @@ def import_cookie_from_browser() -> tuple[str | None, str | None]:
             "自动读取需要以下任一条件：\n\n"
             "方式一（推荐）：在 Edge 快捷方式目标末尾添加：\n"
             "  --remote-debugging-port=9222 --remote-allow-origins=*\n"
-            "然后重启浏览器，再点击「从浏览器导入」\n\n"
-            "方式二：pip install browser_cookie3"
+            "然后重启浏览器，再点击「从浏览器导入」\n"
+            "（方式一还需要 websocket-client：pip install websocket-client）\n\n"
+            "方式二：pip install browser_cookie3\n\n"
+            "CDP 诊断信息：\n" + "\n".join(f"• {e}" for e in cdp_errors)
         )
 
     errors = []
@@ -150,10 +155,11 @@ def import_cookie_from_browser() -> tuple[str | None, str | None]:
             errors.append(err)
 
     # All methods failed — give actionable instructions
+    all_errors = cdp_errors + errors
     return None, (
         "自动读取失败，请尝试以下方式：\n\n"
         "推荐：在 Edge/Chrome 快捷方式目标末尾添加：\n"
         "  --remote-debugging-port=9222 --remote-allow-origins=*\n"
         "然后重启浏览器，再点击「从浏览器导入」\n\n"
-        f"详细错误：\n" + "\n".join(f"• {e}" for e in errors)
+        "详细错误：\n" + "\n".join(f"• {e}" for e in all_errors)
     )
