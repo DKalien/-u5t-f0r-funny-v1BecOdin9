@@ -1,5 +1,5 @@
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint
-from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QIcon
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint, QRect, QRectF, QPointF
+from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QIcon, QCursor, QPolygonF
 from PyQt6.QtWidgets import (
     QWidget, QMenu, QDialog, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton,
@@ -7,6 +7,9 @@ from PyQt6.QtWidgets import (
 )
 from datetime import datetime
 import json
+import math
+import os
+import sys
 import api_client
 from config import save_config
 import cookie_reader
@@ -198,6 +201,8 @@ class TokenWidget(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAutoFillBackground(False)
         self.setMouseTracking(True)
         self.setFixedWidth(260)
         self.setFixedHeight(140)
@@ -217,7 +222,6 @@ class TokenWidget(QWidget):
 
     def _setup_tray(self):
         """Initialize system tray icon and menu."""
-        import os, sys
         # 兼容 PyInstaller 打包后的路径
         base_path = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
         icon_path = os.path.join(base_path, "icon.ico")
@@ -276,6 +280,9 @@ class TokenWidget(QWidget):
             p.setPen(QPen(ACCENT_GREEN))
             p.drawText(150, 22, _fmt_money(self._balance))
 
+        # 刷新按钮（从浏览器导入）
+        self._refresh_btn_rect = self._draw_refresh_button(p)
+
         # 最小化按钮（右上角 ─ 符号）
         self._minimize_btn_rect = self._draw_minimize_button(p)
 
@@ -294,8 +301,13 @@ class TokenWidget(QWidget):
             bar_x, bar_y, bar_w, bar_h = 16, 50, 228, 14
             p.setBrush(QBrush(BAR_BG))
             p.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 4, 4)
-            p.setBrush(QBrush(_bar_color(1 - pct)))
-            p.drawRoundedRect(bar_x, bar_y, int(bar_w * min(pct, 1.0)), bar_h, 4, 4)
+
+            fill_w = int(bar_w * min(pct, 1.0))
+            if fill_w > 0:
+                # 当填充宽度较小时，限制圆角半径，避免超出外框圆角范围
+                fill_radius = min(4, fill_w // 2)
+                p.setBrush(QBrush(_bar_color(1 - pct)))
+                p.drawRoundedRect(bar_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
 
             p.setPen(QPen(TEXT_COLOR))
             p.drawText(16, 80, f"{_fmt_tokens(self._plan_used)} / {_fmt_tokens(self._plan_total)}")
@@ -314,7 +326,6 @@ class TokenWidget(QWidget):
             # Estimated days remaining
             remaining = self._plan_total - self._plan_used
             if self._month_used > 0 and remaining > 0:
-                from datetime import datetime
                 day_of_month = datetime.now().day
                 if day_of_month > 0:
                     daily_rate = self._month_used / day_of_month
@@ -358,7 +369,6 @@ class TokenWidget(QWidget):
 
     def _draw_minimize_button(self, p: QPainter):
         """绘制右上角最小化按钮，返回按钮区域 QRect。"""
-        from PyQt6.QtCore import QRect
         btn_size = 20
         btn_margin = 8
         btn_x = self.width() - btn_size - btn_margin
@@ -373,15 +383,53 @@ class TokenWidget(QWidget):
         p.drawRoundedRect(btn_rect, 4, 4)
 
         # 绘制 ─ 符号
-        p.setPen(QPen(QColor(200, 200, 200)))
+        p.setPen(QPen(QColor(190, 190, 190), 2))
         line_y = btn_y + btn_size // 2
-        p.drawLine(btn_x + 5, line_y, btn_x + btn_size - 5, line_y)
+        p.drawLine(btn_x + 6, line_y, btn_x + btn_size - 6, line_y)
+
+        return btn_rect
+
+    def _draw_refresh_button(self, p: QPainter):
+        """绘制从浏览器导入按钮（刷新图标），返回按钮区域 QRect。"""
+        btn_size = 20
+        btn_margin = 8
+        gap = 4  # 与最小化按钮的间距
+        min_btn_x = self.width() - btn_size - btn_margin
+        btn_x = min_btn_x - btn_size - gap
+        btn_y = btn_margin
+        btn_rect = QRect(btn_x, btn_y, btn_size, btn_size)
+
+        # 按钮背景（悬停时高亮）
+        mouse_pos = self.mapFromGlobal(self.cursor().pos())
+        hovered = btn_rect.contains(mouse_pos)
+        p.setBrush(QBrush(QColor(255, 255, 255, 50) if hovered else QColor(255, 255, 255, 20)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(btn_rect, 4, 4)
+
+        # 绘制下载图标：向下箭头 + 底座横线
+        cx = int(btn_x + btn_size / 2)
+        cy = int(btn_y + btn_size / 2)
+        icon_color = QColor(190, 190, 190)
+
+        p.setPen(QPen(icon_color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        # 箭头竖线
+        p.drawLine(cx, cy - 4, cx, cy + 2)
+        # 箭头两边
+        p.drawLine(cx, cy + 2, cx - 3, cy - 1)
+        p.drawLine(cx, cy + 2, cx + 3, cy - 1)
+        # 底座横线
+        p.drawLine(cx - 4, cy + 4, cx + 4, cy + 4)
 
         return btn_rect
 
     # ── Mouse events ────────────────────────────────────────────
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            # 检测是否点击刷新按钮（从浏览器导入）
+            if hasattr(self, '_refresh_btn_rect') and self._refresh_btn_rect.contains(e.pos()):
+                self._import_cookie_quick()
+                e.accept()
+                return
             # 检测是否点击最小化按钮
             if hasattr(self, '_minimize_btn_rect') and self._minimize_btn_rect.contains(e.pos()):
                 self.close()
@@ -415,8 +463,17 @@ class TokenWidget(QWidget):
             self.move(new_pos)
             e.accept()
         else:
-            # 鼠标悬停时更新按钮高亮状态
-            self.update()
+            # 鼠标悬停时更新按钮高亮状态，并切换光标
+            pos = e.position().toPoint()
+            on_btn = False
+            if hasattr(self, '_minimize_btn_rect') and self._minimize_btn_rect.contains(pos):
+                on_btn = True
+            if hasattr(self, '_refresh_btn_rect') and self._refresh_btn_rect.contains(pos):
+                on_btn = True
+            new_cursor = Qt.CursorShape.PointingHandCursor if on_btn else Qt.CursorShape.ArrowCursor
+            if self.cursor().shape() != new_cursor:
+                self.setCursor(QCursor(new_cursor))
+                self.update()
 
     def mouseReleaseEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -611,7 +668,6 @@ class TokenWidget(QWidget):
                 lines.append(f"已用折合 ≈ ¥{used_cost:.2f}")
             # Estimate days remaining at current burn rate
             if self._month_used > 0 and self._month_limit > 0:
-                from datetime import datetime
                 day_of_month = datetime.now().day
                 if day_of_month > 0:
                     daily_rate = self._month_used / day_of_month

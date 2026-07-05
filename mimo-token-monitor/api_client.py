@@ -1,4 +1,13 @@
+import os
 import requests
+
+# 确保打包后 requests 也能找到 CA 证书
+if "SSL_CERT_FILE" not in os.environ:
+    try:
+        import certifi
+        os.environ["SSL_CERT_FILE"] = certifi.where()
+    except Exception:
+        pass
 
 BASE = "https://platform.xiaomimimo.com"
 BALANCE_URL = f"{BASE}/api/v1/balance"
