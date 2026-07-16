@@ -44,6 +44,7 @@ def write_snapshot(
     plan_total: int,
     month_used: int,
     month_limit: int,
+    daily_used: int = 0,
     error: str | None = None,
 ) -> bool:
     """
@@ -56,6 +57,7 @@ def write_snapshot(
         plan_total: Total plan tokens limit
         month_used: This month tokens used
         month_limit: This month tokens limit
+        daily_used: Today's tokens used
         error: Error message if any
 
     Returns:
@@ -80,6 +82,7 @@ def write_snapshot(
             "used_percentage": used_percentage,
             "used_amount": _format_tokens(plan_used) if plan_used > 0 else None,
             "total_amount": _format_tokens(plan_total) if plan_total > 0 else None,
+            "daily_used": _format_tokens(daily_used) if daily_used > 0 else None,
             "balance": round(float(balance), 2) if balance is not None else None,
             "balance_currency": "CNY",
             "expires_at": None,

@@ -7,6 +7,8 @@ DEFAULT_CONFIG = {
     "opacity": 0.85,
     "position": [100, 100],
     "snapshot_path": "",  # Path for claude-hud snapshot (empty = disabled)
+    "daily_baseline_date": "",  # Date of daily baseline (YYYY-MM-DD format)
+    "daily_baseline_usage": 0,  # Month-used value at start of day
 }
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".mimo-widget")

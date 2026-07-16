@@ -194,6 +194,8 @@ class TokenWidget(QWidget):
         self._payg_output = 0
         self._payg_total_cost = None
         self._payg_month_cost = None
+        # Daily usage
+        self._daily_used = 0  # Today's token usage
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -322,6 +324,23 @@ class TokenWidget(QWidget):
                 p.drawText(16, 82, 228, 16,
                            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                            f"{plan_name} 套餐 ¥{used_cost:.2f} / ¥{price}")
+
+            # Display daily usage (show even if 0)
+            if self._plan_total > 0:  # Only show when we have plan data
+                p.setPen(QPen(ACCENT_GREEN))
+                daily_text = _fmt_tokens(self._daily_used) if self._daily_used > 0 else "0"
+
+                # Calculate daily cost
+                _, _, cost_per_credit = _get_plan_tier_info(self._plan_total)
+                if cost_per_credit and self._daily_used > 0:
+                    daily_cost = self._daily_used * cost_per_credit
+                    p.drawText(16, 98, 228, 16,
+                               Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                               f"今日已用 {daily_text} Cr / ¥{daily_cost:.2f}")
+                else:
+                    p.drawText(16, 98, 228, 16,
+                               Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                               f"今日已用 {daily_text} Cr")
 
             # Estimated days remaining
             remaining = self._plan_total - self._plan_used
@@ -599,6 +618,8 @@ class TokenWidget(QWidget):
         # Parse usage / plan info
         if usage_result["ok"] and usage_result["data"]:
             self._parse_plan(usage_result["data"])
+            # Update daily baseline after parsing month usage
+            self._update_daily_baseline()
 
         self._last_update = datetime.now().strftime("%H:%M:%S")
         self._update_tooltip(bal_result, usage_result)
@@ -651,6 +672,36 @@ class TokenWidget(QWidget):
         except Exception:
             pass
 
+    def _update_daily_baseline(self):
+        """Update daily usage baseline and calculate today's usage.
+
+        Logic:
+        - Check if today is a new day
+        - If new day, save current month_usage as baseline
+        - Calculate today's usage = current month_usage - baseline
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
+        baseline_date = self.cfg.get("daily_baseline_date", "")
+        baseline_usage = self.cfg.get("daily_baseline_usage", 0)
+
+        # Check if it's a new day or baseline is not set
+        if baseline_date != today:
+            # New day: save current month_used as baseline
+            self.cfg["daily_baseline_date"] = today
+            self.cfg["daily_baseline_usage"] = self._month_used
+            save_config(self.cfg)
+            baseline_usage = self._month_used
+
+        # Calculate today's usage
+        # Handle case where month_used might reset (new billing cycle)
+        if self._month_used >= baseline_usage:
+            self._daily_used = self._month_used - baseline_usage
+        else:
+            # Month reset (new billing cycle), reset baseline
+            self.cfg["daily_baseline_usage"] = self._month_used
+            save_config(self.cfg)
+            self._daily_used = 0
+
     def _update_tooltip(self, bal_result, usage_result):
         lines = []
         if self._balance is not None and self._balance != 0:
@@ -666,6 +717,9 @@ class TokenWidget(QWidget):
             if cost_per_credit:
                 used_cost = self._plan_used * cost_per_credit
                 lines.append(f"已用折合 ≈ ¥{used_cost:.2f}")
+            # Daily usage
+            if self._daily_used > 0:
+                lines.append(f"今日已用 {_fmt_tokens(self._daily_used)}")
             # Estimate days remaining at current burn rate
             if self._month_used > 0 and self._month_limit > 0:
                 day_of_month = datetime.now().day
@@ -700,6 +754,7 @@ class TokenWidget(QWidget):
             plan_total=self._plan_total,
             month_used=self._month_used,
             month_limit=self._month_limit,
+            daily_used=self._daily_used,
             error=self._last_error if self._last_error else None,
         )
 
