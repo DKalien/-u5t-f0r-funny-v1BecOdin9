@@ -1,5 +1,5 @@
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint, QRect, QRectF, QPointF
-from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QIcon, QCursor, QPolygonF
+from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QIcon, QCursor, QPolygonF, QPainterPath
 from PyQt6.QtWidgets import (
     QWidget, QMenu, QDialog, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton,
@@ -309,7 +309,14 @@ class TokenWidget(QWidget):
                 # 当填充宽度较小时，限制圆角半径，避免超出外框圆角范围
                 fill_radius = min(4, fill_w // 2)
                 p.setBrush(QBrush(_bar_color(1 - pct)))
+                # 填充自身的圆角在宽度很小时会变成方角，可能露到外框的
+                # 圆角区域之外；将填充裁剪到外框路径内，确保四角始终对齐。
+                p.save()
+                bar_path = QPainterPath()
+                bar_path.addRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 4, 4)
+                p.setClipPath(bar_path)
                 p.drawRoundedRect(bar_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
+                p.restore()
 
             p.setPen(QPen(TEXT_COLOR))
             p.drawText(16, 80, f"{_fmt_tokens(self._plan_used)} / {_fmt_tokens(self._plan_total)}")
