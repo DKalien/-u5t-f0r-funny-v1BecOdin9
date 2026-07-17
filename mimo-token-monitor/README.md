@@ -15,22 +15,22 @@
 - 支持按量付费用量查询
 - 可拖动、半透明、置顶显示
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip
-- **单实例运行**：防止重复启动，重复运行时提示检查托盘
+- **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 
 ## 使用方式
 
-### 方式一：VBS 启动器（推荐，无控制台窗口）
+### 方式一：轻量启动器 EXE（推荐）
 
-双击 `MiMo-Token-Monitor.vbs`，程序会在后台运行，不会显示黑色控制台窗口。
+双击 `dist\MiMo-Token-Monitor.exe`，程序会在后台运行，不显示控制台窗口。这个 exe 只负责启动项目根目录中的 `main.py`；源码、配置和日志仍使用项目现有文件。
 
-**修改代码后无需任何操作，直接双击 .vbs 即可生效！**
+**修改任意 Python 源码后，直接重启 exe 即可生效，无需重新打包。** 仅首次使用需要在本机安装 Python 与项目依赖：
 
-### 方式二：批处理启动器（调试用）
+```bash
+python -m pip install -r requirements.txt
+```
 
-双击 `MiMo-Token-Monitor.bat`，会显示控制台窗口，可以看到输出信息（调试时有用）。
-
-### 方式三：直接运行源码
+### 方式二：直接运行源码
 
 ```bash
 # 安装依赖（首次运行）
@@ -66,7 +66,15 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### 打包 exe
+### 构建轻量启动器 EXE
+
+```powershell
+.\build-launcher.ps1
+```
+
+该脚本会生成 `dist\MiMo-Token-Monitor.exe`，并把 PyInstaller 的 spec 与中间文件放在 `.build-launcher`，不会覆盖完整发行版的 `MiMo-Token-Monitor.spec`。
+
+### 构建独立完整发行版
 
 ```bash
 pip install pyinstaller

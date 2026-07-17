@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 build/
+.build-launcher/
 *.spec
 !MiMo-Token-Monitor.spec
 .mimo-widget/
