@@ -343,11 +343,11 @@ class TokenWidget(QWidget):
                     daily_cost = self._daily_used * cost_per_credit
                     p.drawText(16, 98, 228, 16,
                                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                               f"今日已用 {daily_text} Cr / ¥{daily_cost:.2f}")
+                               f"今日已用: {daily_text} / ¥{daily_cost:.2f}")
                 else:
                     p.drawText(16, 98, 228, 16,
                                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                               f"今日已用 {daily_text} Cr")
+                               f"今日已用: {daily_text}")
 
             # Estimated days remaining
             remaining = self._plan_total - self._plan_used
