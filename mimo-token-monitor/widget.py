@@ -3,7 +3,7 @@ from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QIcon, Q
 from PyQt6.QtWidgets import (
     QWidget, QMenu, QDialog, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton,
-    QHBoxLayout, QLabel, QMessageBox, QApplication, QSystemTrayIcon,
+    QCheckBox, QHBoxLayout, QLabel, QMessageBox, QApplication, QSystemTrayIcon,
 )
 from datetime import datetime
 import json
@@ -54,20 +54,30 @@ def _fmt_money(v) -> str:
     return f"¥{float(v):.2f}"
 
 
+def _expiry_days_left(expiry_date):
+    """Return days until the user-entered expiry date, or None if invalid."""
+    expiry_text = str(expiry_date or "").strip()
+    if not expiry_text:
+        return None
+
+    try:
+        expiry = datetime.strptime(expiry_text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (expiry - datetime.now().date()).days
+
+
 def _format_expiry(expiry_date) -> str:
     """Format the user-entered expiry date and add a short-term reminder."""
     expiry_text = str(expiry_date or "").strip()
     if not expiry_text:
         return "未设置"
 
-    try:
-        expiry = datetime.strptime(expiry_text, "%Y-%m-%d").date()
-    except ValueError:
+    days_left = _expiry_days_left(expiry_text)
+    if days_left is None:
         return expiry_text
-
-    days_left = (expiry - datetime.now().date()).days
     if 0 <= days_left < 7:
-        return f"{expiry_text}，还剩 {days_left} 日"
+        return f"{expiry_text}，还剩{days_left}天"
     return expiry_text
 
 
@@ -105,7 +115,7 @@ class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MiMo Token 设置")
-        self.setFixedSize(500, 330)
+        self.setFixedSize(500, 370)
         self.cfg = dict(cfg)
 
         layout = QFormLayout(self)
@@ -138,6 +148,10 @@ class SettingsDialog(QDialog):
         self.expiry_edit = QLineEdit(str(cfg.get("expiry_date", "") or ""))
         self.expiry_edit.setPlaceholderText("例如 2026-08-31")
         layout.addRow("有效期至:", self.expiry_edit)
+
+        self.expiry_alert_check = QCheckBox("有效期小于等于 3 天时显示红色")
+        self.expiry_alert_check.setChecked(cfg.get("expiry_alert_enabled", True))
+        layout.addRow("到期提醒:", self.expiry_alert_check)
 
         self.snapshot_edit = QLineEdit(cfg.get("snapshot_path", ""))
         self.snapshot_edit.setPlaceholderText("留空禁用 | 例: ~/.claude/plugins/claude-hud/mimo-snapshot.json")
@@ -192,6 +206,7 @@ class SettingsDialog(QDialog):
         self.cfg["refresh_interval"] = self.interval_spin.value()
         self.cfg["opacity"] = self.opacity_spin.value()
         self.cfg["expiry_date"] = self.expiry_edit.text().strip()
+        self.cfg["expiry_alert_enabled"] = self.expiry_alert_check.isChecked()
         self.cfg["snapshot_path"] = self.snapshot_edit.text().strip()
         return self.cfg
 
@@ -373,7 +388,14 @@ class TokenWidget(QWidget):
                                f"今日已用: {daily_text}")
 
             expiry_date = _format_expiry(self.cfg.get("expiry_date", ""))
-            p.setPen(QPen(DIM))
+            expiry_days_left = _expiry_days_left(self.cfg.get("expiry_date", ""))
+            alert_enabled = self.cfg.get("expiry_alert_enabled", True)
+            expiry_color = (
+                ACCENT_RED
+                if alert_enabled and expiry_days_left is not None and expiry_days_left <= 3
+                else DIM
+            )
+            p.setPen(QPen(expiry_color))
             p.drawText(16, 124, f"有效期至 {expiry_date}")
 
         elif self._payg_tokens > 0 or self._payg_total_cost:
