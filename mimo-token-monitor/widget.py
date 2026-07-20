@@ -54,6 +54,23 @@ def _fmt_money(v) -> str:
     return f"¥{float(v):.2f}"
 
 
+def _format_expiry(expiry_date) -> str:
+    """Format the user-entered expiry date and add a short-term reminder."""
+    expiry_text = str(expiry_date or "").strip()
+    if not expiry_text:
+        return "未设置"
+
+    try:
+        expiry = datetime.strptime(expiry_text, "%Y-%m-%d").date()
+    except ValueError:
+        return expiry_text
+
+    days_left = (expiry - datetime.now().date()).days
+    if 0 <= days_left < 7:
+        return f"{expiry_text}，还剩 {days_left} 日"
+    return expiry_text
+
+
 # ── Plan tier definitions ──────────────────────────────────────
 PLAN_TIERS = [
     (82_000_000_000, "Max", 659),
@@ -88,7 +105,7 @@ class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MiMo Token 设置")
-        self.setFixedSize(500, 290)
+        self.setFixedSize(500, 330)
         self.cfg = dict(cfg)
 
         layout = QFormLayout(self)
@@ -118,6 +135,10 @@ class SettingsDialog(QDialog):
         self.opacity_spin.setValue(cfg.get("opacity", 0.85))
         layout.addRow("透明度:", self.opacity_spin)
 
+        self.expiry_edit = QLineEdit(str(cfg.get("expiry_date", "") or ""))
+        self.expiry_edit.setPlaceholderText("例如 2026-08-31")
+        layout.addRow("有效期至:", self.expiry_edit)
+
         self.snapshot_edit = QLineEdit(cfg.get("snapshot_path", ""))
         self.snapshot_edit.setPlaceholderText("留空禁用 | 例: ~/.claude/plugins/claude-hud/mimo-snapshot.json")
         layout.addRow("快照路径:", self.snapshot_edit)
@@ -125,6 +146,7 @@ class SettingsDialog(QDialog):
         hint = QLabel(
             "自动导入: Edge 快捷方式末尾加 --remote-debugging-port=9222 --remote-allow-origins=*，重启浏览器后点击按钮\n"
             "手动导入: F12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n"
+            "有效期至: 手动填写套餐到期日期，例如 2026-08-31\n"
             "快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量"
         )
         hint.setWordWrap(True)
@@ -169,6 +191,7 @@ class SettingsDialog(QDialog):
         self.cfg["cookie"] = self.cookie_edit.text().strip()
         self.cfg["refresh_interval"] = self.interval_spin.value()
         self.cfg["opacity"] = self.opacity_spin.value()
+        self.cfg["expiry_date"] = self.expiry_edit.text().strip()
         self.cfg["snapshot_path"] = self.snapshot_edit.text().strip()
         return self.cfg
 
@@ -349,16 +372,9 @@ class TokenWidget(QWidget):
                                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                                f"今日已用: {daily_text}")
 
-            # Estimated days remaining
-            remaining = self._plan_total - self._plan_used
-            if self._month_used > 0 and remaining > 0:
-                day_of_month = datetime.now().day
-                if day_of_month > 0:
-                    daily_rate = self._month_used / day_of_month
-                    if daily_rate > 0:
-                        days_left = int(remaining / daily_rate)
-                        p.setPen(QPen(DIM))
-                        p.drawText(16, 124, f"按当前速率约可用 {days_left} 天")
+            expiry_date = _format_expiry(self.cfg.get("expiry_date", ""))
+            p.setPen(QPen(DIM))
+            p.drawText(16, 124, f"有效期至 {expiry_date}")
 
         elif self._payg_tokens > 0 or self._payg_total_cost:
             # Pay-as-you-go display
@@ -727,14 +743,8 @@ class TokenWidget(QWidget):
             # Daily usage
             if self._daily_used > 0:
                 lines.append(f"今日已用 {_fmt_tokens(self._daily_used)}")
-            # Estimate days remaining at current burn rate
-            if self._month_used > 0 and self._month_limit > 0:
-                day_of_month = datetime.now().day
-                if day_of_month > 0:
-                    daily_rate = self._month_used / day_of_month
-                    if daily_rate > 0:
-                        days_left = remaining / daily_rate
-                        lines.append(f"预计可用: {int(days_left)} 天")
+            expiry_date = _format_expiry(self.cfg.get("expiry_date", ""))
+            lines.append(f"有效期至: {expiry_date}")
         if self._month_limit > 0:
             m_pct = self._month_used / self._month_limit * 100
             lines.append(f"本月: {_fmt_tokens(self._month_used)} / {_fmt_tokens(self._month_limit)} ({m_pct:.1f}%)")
@@ -762,6 +772,7 @@ class TokenWidget(QWidget):
             month_used=self._month_used,
             month_limit=self._month_limit,
             daily_used=self._daily_used,
+            expiry_date=self.cfg.get("expiry_date", ""),
             error=self._last_error if self._last_error else None,
         )
 
@@ -772,6 +783,7 @@ class TokenWidget(QWidget):
             self.cfg = dlg.get_config()
             save_config(self.cfg)
             self.setWindowOpacity(self.cfg.get("opacity", 0.85))
+            self.update()
             interval_ms = self.cfg.get("refresh_interval", 300) * 1000
             self._timer.setInterval(interval_ms)
             self._do_fetch()

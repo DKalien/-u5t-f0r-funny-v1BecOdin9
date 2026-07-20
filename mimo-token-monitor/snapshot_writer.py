@@ -46,6 +46,7 @@ def write_snapshot(
     month_limit: int,
     daily_used: int = 0,
     error: str | None = None,
+    expiry_date: str = "",
 ) -> bool:
     """
     Write MIMO usage snapshot for claude-hud to read.
@@ -58,6 +59,7 @@ def write_snapshot(
         month_used: This month tokens used
         month_limit: This month tokens limit
         daily_used: Today's tokens used
+        expiry_date: User-entered plan expiry date
         error: Error message if any
 
     Returns:
@@ -85,7 +87,7 @@ def write_snapshot(
             "daily_used": _format_tokens(daily_used) if daily_used > 0 else None,
             "balance": round(float(balance), 2) if balance is not None else None,
             "balance_currency": "CNY",
-            "expires_at": None,
+            "expires_at": str(expiry_date or "").strip() or None,
             "error": error,
         }
 
