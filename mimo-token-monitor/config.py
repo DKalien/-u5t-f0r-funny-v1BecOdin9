@@ -11,6 +11,7 @@ DEFAULT_CONFIG = {
     "expiry_alert_enabled": True,  # Highlight near-expiry dates in red
     "daily_baseline_date": "",  # Date of daily baseline (YYYY-MM-DD format)
     "daily_baseline_usage": 0,  # Month-used value at start of day
+    "always_on_top": True,
 }
 
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".mimo-widget")

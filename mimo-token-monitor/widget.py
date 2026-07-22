@@ -14,6 +14,7 @@ import api_client
 from config import save_config
 import cookie_reader
 import snapshot_writer
+import window_snap
 
 SNAP_THRESHOLD = 15  # px, 距屏幕边缘多少像素内触发吸附
 
@@ -219,6 +220,7 @@ class TokenWidget(QWidget):
         self._drag_pos = QPoint()
         self._last_error = ""
         self._last_update = "等待更新..."
+        self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
 
         # Data from API
         self._balance = None       # float, yuan
@@ -235,11 +237,13 @@ class TokenWidget(QWidget):
         # Daily usage
         self._daily_used = 0  # Today's token usage
 
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-        )
+        # Always-on-top: controlled by cfg; default True for backward compat
+        self._always_on_top = cfg.get("always_on_top", True)
+        _flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        if self._always_on_top:
+            _flags |= Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(_flags)
+        self.setWindowTitle("MiMo Token Monitor")  # native title for Win32 EnumWindows
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setAutoFillBackground(False)
@@ -319,6 +323,9 @@ class TokenWidget(QWidget):
         if self._balance is not None and self._balance != 0:
             p.setPen(QPen(ACCENT_GREEN))
             p.drawText(150, 22, _fmt_money(self._balance))
+
+        # 置顶按钮
+        self._pin_btn_rect = self._draw_pin_button(p)
 
         # 刷新按钮（从浏览器导入）
         self._refresh_btn_rect = self._draw_refresh_button(p)
@@ -486,9 +493,74 @@ class TokenWidget(QWidget):
 
         return btn_rect
 
+    def _set_always_on_top(self, enabled: bool):
+        """Toggle WindowStaysOnTopHint while preserving window position."""
+        self._always_on_top = enabled
+        self.cfg["always_on_top"] = enabled
+        save_config(self.cfg)
+        pos = self.pos()
+        flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+        if enabled:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        self.setWindowFlags(flags)
+        self.move(pos)
+        self.show()
+        if enabled:
+            self.raise_()
+        self.update()
+
+    def _draw_pin_button(self, p: QPainter):
+        """Draw pin/unpin toggle button; returns button QRect."""
+        btn_size = 20
+        btn_margin = 8
+        gap = 4  # spacing between buttons
+        # pin is leftmost: to the left of the refresh button
+        refresh_btn_x = self.width() - btn_size - btn_margin - btn_size - gap
+        btn_x = refresh_btn_x - btn_size - gap
+        btn_y = btn_margin
+        btn_rect = QRect(btn_x, btn_y, btn_size, btn_size)
+
+        # Hover background (same style as minimize/refresh buttons)
+        mouse_pos = self.mapFromGlobal(self.cursor().pos())
+        hovered = btn_rect.contains(mouse_pos)
+        p.setBrush(QBrush(QColor(255, 255, 255, 40) if hovered else QColor(255, 255, 255, 20)))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(btn_rect, 4, 4)
+
+        cx = int(btn_x + btn_size / 2)
+        cy = int(btn_y + btn_size / 2)
+
+        if self._always_on_top:
+            pin_color = QColor(100, 200, 255)  # bright accent when pinned
+        else:
+            pin_color = QColor(120, 120, 120)  # dim when unpinned
+
+        p.setPen(QPen(pin_color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        # Pin: circle (pin head)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(int(cx - 3), int(cy - 4), 6, 6)
+        # Pin: vertical shaft
+        p.drawLine(int(cx), int(cy + 2), int(cx), int(cy + 5))
+        # Pin: base line
+        p.drawLine(int(cx - 4), int(cy + 5), int(cx + 4), int(cy + 5))
+
+        # Unpinned: diagonal slash overlay (red)
+        if not self._always_on_top:
+            p.setPen(QPen(QColor(244, 67, 54), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(int(btn_x + 4), int(btn_y + btn_size - 4),
+                       int(btn_x + btn_size - 4), int(btn_y + 4))
+
+        return btn_rect
+
+
     # ── Mouse events ────────────────────────────────────────────
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            # 检测是否点击置顶按钮
+            if hasattr(self, '_pin_btn_rect') and self._pin_btn_rect.contains(e.pos()):
+                self._set_always_on_top(not self._always_on_top)
+                e.accept()
+                return
             # 检测是否点击刷新按钮（从浏览器导入）
             if hasattr(self, '_refresh_btn_rect') and self._refresh_btn_rect.contains(e.pos()):
                 self._import_cookie_quick()
@@ -512,17 +584,60 @@ class TokenWidget(QWidget):
                 w, h = self.width(), self.height()
                 x, y = new_pos.x(), new_pos.y()
 
-                if x < geo.left() + SNAP_THRESHOLD:
-                    x = geo.left()
-                elif x + w > geo.right() - SNAP_THRESHOLD:
-                    x = geo.right() - w
+                geo_right = geo.x() + geo.width()
+                geo_bottom = geo.y() + geo.height()
+                if x < geo.x() + SNAP_THRESHOLD:
+                    x = geo.x()
+                elif x + w > geo_right - SNAP_THRESHOLD:
+                    x = geo_right - w
 
-                if y < geo.top() + SNAP_THRESHOLD:
-                    y = geo.top()
-                elif y + h > geo.bottom() - SNAP_THRESHOLD:
-                    y = geo.bottom() - h
+                if y < geo.y() + SNAP_THRESHOLD:
+                    y = geo.y()
+                elif y + h > geo_bottom - SNAP_THRESHOLD:
+                    y = geo_bottom - h
 
                 new_pos = QPoint(x, y)
+
+            # Inter-window snap (ETF Tracker / other MiMo instance)
+            # Win32 GetWindowRect returns physical pixel coordinates.
+            # On dpr>1 monitors these differ from Qt logical coordinates,
+            # so we convert to physical space before snapping, then back.
+            try:
+                own_hwnd = int(self.winId())
+                rects = window_snap.get_other_window_rects(own_hwnd)
+                if rects:
+                    # Determine the screen where the window currently is
+                    snap_screen = QApplication.screenAt(new_pos) or screen
+                    if snap_screen:
+                        scr_geo = snap_screen.geometry()
+                        scr_origin = (scr_geo.x(), scr_geo.y())
+                        dpr = window_snap.normalize_dpr(snap_screen.devicePixelRatio())
+                    else:
+                        scr_origin = (0, 0)
+                        dpr = 1.0
+
+                    # Convert own position/size to physical pixels
+                    phys_pos = window_snap.qt_to_physical_position(
+                        (new_pos.x(), new_pos.y()), scr_origin, dpr,
+                    )
+                    phys_size = window_snap.qt_to_physical_size(
+                        (self.width(), self.height()), dpr,
+                    )
+                    # Threshold in physical pixels
+                    phys_threshold = max(1, round(SNAP_THRESHOLD * dpr))
+
+                    # Snap in physical space (rects are already physical)
+                    phys_snapped = window_snap.snap_position(
+                        phys_pos, phys_size, rects, phys_threshold,
+                    )
+
+                    # Convert back to Qt logical coordinates
+                    qt_pos = window_snap.physical_to_qt_position(
+                        phys_snapped, scr_origin, dpr,
+                    )
+                    new_pos = QPoint(qt_pos[0], qt_pos[1])
+            except Exception:
+                pass
 
             self.move(new_pos)
             e.accept()
@@ -533,6 +648,8 @@ class TokenWidget(QWidget):
             if hasattr(self, '_minimize_btn_rect') and self._minimize_btn_rect.contains(pos):
                 on_btn = True
             if hasattr(self, '_refresh_btn_rect') and self._refresh_btn_rect.contains(pos):
+                on_btn = True
+            if hasattr(self, '_pin_btn_rect') and self._pin_btn_rect.contains(pos):
                 on_btn = True
             new_cursor = Qt.CursorShape.PointingHandCursor if on_btn else Qt.CursorShape.ArrowCursor
             if self.cursor().shape() != new_cursor:
