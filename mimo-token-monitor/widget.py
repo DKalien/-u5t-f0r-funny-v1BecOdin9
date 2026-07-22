@@ -111,12 +111,30 @@ class FetchWorker(QThread):
         self.finished.emit(bal, usage)
 
 
+
+# ── Third-party usage probe thread ──────────────────────────────
+class ThirdPartyFetchWorker(QThread):
+    """Background thread for third-party usage API fetch."""
+    finished = pyqtSignal(dict)
+
+    def __init__(self, base_url: str, api_key: str, window: str = "7d"):
+        super().__init__()
+        self.base_url = base_url
+        self.api_key = api_key
+        self.window = window
+
+    def run(self):
+        result = api_client.fetch_third_party_usage(
+            self.base_url, self.api_key, self.window,
+        )
+        self.finished.emit(result)
+
 # ── Settings dialog ─────────────────────────────────────────────
 class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MiMo Token 设置")
-        self.setFixedSize(500, 370)
+        self.setFixedSize(500, 440)
         self.cfg = dict(cfg)
 
         layout = QFormLayout(self)
@@ -158,11 +176,22 @@ class SettingsDialog(QDialog):
         self.snapshot_edit.setPlaceholderText("留空禁用 | 例: ~/.claude/plugins/claude-hud/mimo-snapshot.json")
         layout.addRow("快照路径:", self.snapshot_edit)
 
+        # third-party usage settings
+        self.tp_base_url_edit = QLineEdit(cfg.get("third_party_base_url", "http://codex.wlbclub.com"))
+        self.tp_base_url_edit.setPlaceholderText("默认 http://codex.wlbclub.com，不要填 /v1")
+        layout.addRow("API Base URL:", self.tp_base_url_edit)
+
+        self.tp_api_key_edit = QLineEdit(cfg.get("third_party_api_key", ""))
+        self.tp_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.tp_api_key_edit.setPlaceholderText("来自 CC Switch 的 API Key")
+        layout.addRow("API Key:", self.tp_api_key_edit)
+
         hint = QLabel(
             "自动导入: Edge 快捷方式末尾加 --remote-debugging-port=9222 --remote-allow-origins=*，重启浏览器后点击按钮\n"
             "手动导入: F12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n"
             "有效期至: 手动填写套餐到期日期，例如 2026-08-31\n"
-            "快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量"
+            "快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量\n"
+            "API Usage: 填写 Base URL 和 API Key 后可在标题栏下拉切换到第三方用量显示\n"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
@@ -209,6 +238,8 @@ class SettingsDialog(QDialog):
         self.cfg["expiry_date"] = self.expiry_edit.text().strip()
         self.cfg["expiry_alert_enabled"] = self.expiry_alert_check.isChecked()
         self.cfg["snapshot_path"] = self.snapshot_edit.text().strip()
+        self.cfg["third_party_base_url"] = self.tp_base_url_edit.text().strip() or "http://codex.wlbclub.com"
+        self.cfg["third_party_api_key"] = self.tp_api_key_edit.text().strip()
         return self.cfg
 
 
@@ -236,6 +267,10 @@ class TokenWidget(QWidget):
         self._payg_month_cost = None
         # Daily usage
         self._daily_used = 0  # Today's token usage
+
+        # Third-party usage state
+        self._tp_data = None
+        self._dropdown_rect = QRect()
 
         # Always-on-top: controlled by cfg; default True for backward compat
         self._always_on_top = cfg.get("always_on_top", True)
@@ -313,14 +348,25 @@ class TokenWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
 
-        # Title + balance
+        # Title + dropdown icon
+        display_mode = self.cfg.get("display_mode", "mimo")
         font_title = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         p.setFont(font_title)
         p.setPen(QPen(TEXT_COLOR))
-        p.drawText(16, 22, "MiMo Token")
+        title_text = "MiMo Token" if display_mode == "mimo" else "Usage API"
+        p.drawText(16, 22, title_text)
 
-        # Balance on the right
-        if self._balance is not None and self._balance != 0:
+        # Dropdown icon right after title
+        fm = p.fontMetrics()
+        title_w = int(fm.horizontalAdvance(title_text))
+        dd_x = 16 + title_w + 4
+        dd_y = 22 - int(fm.ascent())
+        dd_h = int(fm.height())
+        self._dropdown_rect = QRect(int(dd_x), int(dd_y), 14, dd_h)
+        self._draw_dropdown_icon(p, self._dropdown_rect)
+
+        # Balance on the right (MiMo mode only)
+        if display_mode == "mimo" and self._balance is not None and self._balance != 0:
             p.setPen(QPen(ACCENT_GREEN))
             p.drawText(150, 22, _fmt_money(self._balance))
 
@@ -333,35 +379,21 @@ class TokenWidget(QWidget):
         # 最小化按钮（右上角 ─ 符号）
         self._minimize_btn_rect = self._draw_minimize_button(p)
 
-        # Plan info
+        # Content area
         font_small = QFont("Microsoft YaHei", 9)
         p.setFont(font_small)
         p.setPen(QPen(TEXT_COLOR))
 
-        if self._plan_total > 0:
+        if display_mode == "third_party":
+            self._paint_third_party(p)
+        elif self._plan_total > 0:
             pct = self._plan_used / self._plan_total
             pct_text = f"{pct * 100:.1f}%"
 
             p.drawText(16, 42, "Token Plan")
             p.drawText(200, 42, pct_text)
 
-            bar_x, bar_y, bar_w, bar_h = 16, 50, 228, 14
-            p.setBrush(QBrush(BAR_BG))
-            p.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 4, 4)
-
-            fill_w = int(bar_w * min(pct, 1.0))
-            if fill_w > 0:
-                # 当填充宽度较小时，限制圆角半径，避免超出外框圆角范围
-                fill_radius = min(4, fill_w // 2)
-                p.setBrush(QBrush(_bar_color(1 - pct)))
-                # 填充自身的圆角在宽度很小时会变成方角，可能露到外框的
-                # 圆角区域之外；将填充裁剪到外框路径内，确保四角始终对齐。
-                p.save()
-                bar_path = QPainterPath()
-                bar_path.addRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 4, 4)
-                p.setClipPath(bar_path)
-                p.drawRoundedRect(bar_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
-                p.restore()
+            self._draw_usage_progress_bar(p, pct)
 
             p.setPen(QPen(TEXT_COLOR))
             p.drawText(16, 80, f"{_fmt_tokens(self._plan_used)} / {_fmt_tokens(self._plan_total)}")
@@ -437,6 +469,28 @@ class TokenWidget(QWidget):
             p.drawText(180, 134, f"更新于 {self._last_update}")
 
         p.end()
+
+    def _draw_usage_progress_bar(self, p: QPainter, used_fraction: float):
+        """Draw the shared usage progress bar for MiMo and API Usage modes."""
+        bar_x, bar_y, bar_w, bar_h = 16, 50, 228, 14
+        usage_fraction = float(used_fraction)
+
+        p.setBrush(QBrush(BAR_BG))
+        p.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 4, 4)
+
+        fill_w = int(bar_w * min(usage_fraction, 1.0))
+        if fill_w > 0:
+            # 当填充宽度较小时，限制圆角半径，避免超出外框圆角范围。
+            fill_radius = min(4, fill_w // 2)
+            p.setBrush(QBrush(_bar_color(1 - usage_fraction)))
+
+            # 将填充裁剪到外框路径内，确保小比例填充也不会露出外框圆角。
+            p.save()
+            bar_path = QPainterPath()
+            bar_path.addRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), 4, 4)
+            p.setClipPath(bar_path)
+            p.drawRoundedRect(bar_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
+            p.restore()
 
     def _draw_minimize_button(self, p: QPainter):
         """绘制右上角最小化按钮，返回按钮区域 QRect。"""
@@ -552,10 +606,135 @@ class TokenWidget(QWidget):
 
         return btn_rect
 
+    def _draw_dropdown_icon(self, p: QPainter, rect: QRect):
+        """Draw a small dropdown triangle icon."""
+        cx = rect.center().x()
+        top = rect.top() + 4
+        bottom = rect.bottom() - 4
+        half_w = 4
+
+        mouse_pos = self.mapFromGlobal(self.cursor().pos())
+        hovered = rect.contains(mouse_pos)
+        color = QColor(200, 200, 200) if hovered else DIM
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(color))
+        triangle = QPolygonF([
+            QPointF(cx - half_w, top),
+            QPointF(cx + half_w, top),
+            QPointF(cx, bottom),
+        ])
+        p.drawPolygon(triangle)
+
+    def _show_display_mode_menu(self):
+        """Show dropdown menu for switching display mode."""
+        menu = QMenu(self)
+        mimo_act = QAction("MiMo Token", self)
+        mimo_act.triggered.connect(lambda: self._set_display_mode("mimo"))
+        menu.addAction(mimo_act)
+        tp_act = QAction("API Usage", self)
+        tp_act.triggered.connect(lambda: self._set_display_mode("third_party"))
+        menu.addAction(tp_act)
+        menu.exec(self.mapToGlobal(QPoint(
+            self._dropdown_rect.x(),
+            self._dropdown_rect.bottom() + 2,
+        )))
+
+    def _set_display_mode(self, mode: str):
+        """Switch display mode and refresh."""
+        self.cfg["display_mode"] = mode
+        save_config(self.cfg)
+        self._do_fetch()
+        self.update()
+
+    def _paint_third_party(self, p: QPainter):
+        """Paint third-party usage data in the content area."""
+        d = self._tp_data or {}
+        has_data = self._tp_data is not None
+        is_valid = d.get("is_valid", False)
+        remaining_pct = d.get("remaining_percent", 0)
+        used_pct = d.get("used_percent", 0)
+
+        # Remaining percentage prominently
+        p.setPen(QPen(ACCENT_GREEN if has_data and is_valid else DIM))
+        font_accent = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
+        p.setFont(font_accent)
+        remaining_text = f"剩余 {remaining_pct:.2f}%" if has_data else "剩余 --"
+        p.drawText(16, 42, remaining_text)
+
+        # Progress bar (always visible; fill represents used percentage)
+        font_small = QFont("Microsoft YaHei", 9)
+        p.setFont(font_small)
+        used_frac = max(0.0, min(float(used_pct) / 100.0, 1.0)) if has_data else 0.0
+        p.setPen(QPen(TEXT_COLOR))
+        self._draw_usage_progress_bar(p, used_frac)
+
+        # Details line
+        p.setPen(QPen(TEXT_COLOR))
+        if has_data:
+            details = f"已用 {used_pct:.2f}% | {d.get('window', '7d')} | {d.get('total_percent', 100)}%"
+        else:
+            details = "等待 API 数据 | 7d | 100%"
+        p.drawText(16, 80, details)
+
+        # Status
+        status_text = "Active" if is_valid else "Inactive" if has_data else "等待"
+        p.setPen(QPen(ACCENT_GREEN if is_valid else ACCENT_RED if has_data else DIM))
+        p.drawText(16, 98, f"状态: {status_text}")
+
+    def _do_fetch_third_party(self):
+        """Dispatch third-party usage fetch."""
+        if hasattr(self, "_tp_worker") and self._tp_worker.isRunning():
+            return
+        api_key = self.cfg.get("third_party_api_key", "")
+        if not api_key:
+            self._last_error = "请在设置中配置 API Key"
+            self._tp_data = None
+            self._update_tooltip(None, None)
+            self.update()
+            return
+        base_url = self.cfg.get("third_party_base_url", "http://codex.wlbclub.com")
+        self._tp_worker = ThirdPartyFetchWorker(base_url, api_key)
+        self._tp_worker.finished.connect(self._on_third_party_fetch_done)
+        self._tp_worker.start()
+
+    def _on_third_party_fetch_done(self, result: dict):
+        """Handle third-party usage fetch result."""
+        if result.get("ok"):
+            self._tp_data = result.get("data")
+            self._last_error = ""
+        else:
+            self._last_error = result.get("error", "第三方用量查询失败")
+        self._last_update = datetime.now().strftime("%H:%M:%S")
+        self._update_tooltip(None, None)
+        self.update()
+
+    def _update_tooltip_third_party(self):
+        """Update tooltip for third-party usage mode."""
+        lines = ["Usage API"]
+        if self._tp_data:
+            d = self._tp_data
+            lines.append(f"剩余: {d.get('remaining_percent', 0):.2f}%")
+            lines.append(f"已用: {d.get('used_percent', 0):.2f}%")
+            lines.append(f"窗口: {d.get('window', '7d')}")
+            lines.append(f"总额: {d.get('total_percent', 100)}%")
+            status = "Active" if d.get("is_valid") else "Inactive"
+            lines.append(f"状态: {status}")
+        if self._last_error:
+            lines.append(f"错误: {self._last_error}")
+        tooltip_text = "\n".join(lines)
+        self.setToolTip(tooltip_text)
+        if hasattr(self, '_tray_icon'):
+            self._tray_icon.setToolTip(tooltip_text[:128] if len(tooltip_text) > 128 else tooltip_text)
 
     # ── Mouse events ────────────────────────────────────────────
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            # 检测是否点击下拉菜单
+            if hasattr(self, '_dropdown_rect') and self._dropdown_rect.contains(e.pos()):
+                self._show_display_mode_menu()
+                e.accept()
+                return
             # 检测是否点击置顶按钮
             if hasattr(self, '_pin_btn_rect') and self._pin_btn_rect.contains(e.pos()):
                 self._set_always_on_top(not self._always_on_top)
@@ -650,6 +829,8 @@ class TokenWidget(QWidget):
             if hasattr(self, '_refresh_btn_rect') and self._refresh_btn_rect.contains(pos):
                 on_btn = True
             if hasattr(self, '_pin_btn_rect') and self._pin_btn_rect.contains(pos):
+                on_btn = True
+            if hasattr(self, '_dropdown_rect') and self._dropdown_rect.contains(pos):
                 on_btn = True
             new_cursor = Qt.CursorShape.PointingHandCursor if on_btn else Qt.CursorShape.ArrowCursor
             if self.cursor().shape() != new_cursor:
@@ -752,6 +933,11 @@ class TokenWidget(QWidget):
 
     # ── Fetch ───────────────────────────────────────────────────
     def _do_fetch(self):
+        display_mode = self.cfg.get("display_mode", "mimo")
+        if display_mode == "third_party":
+            self._do_fetch_third_party()
+            return
+
         if hasattr(self, "_worker") and self._worker.isRunning():
             return
 
@@ -865,6 +1051,11 @@ class TokenWidget(QWidget):
             self._daily_used = 0
 
     def _update_tooltip(self, bal_result, usage_result):
+        display_mode = self.cfg.get("display_mode", "mimo")
+        if display_mode == "third_party":
+            self._update_tooltip_third_party()
+            return
+
         lines = []
         if self._balance is not None and self._balance != 0:
             lines.append(f"余额: {_fmt_money(self._balance)}")
