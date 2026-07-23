@@ -285,8 +285,11 @@ class TokenWidget(QWidget):
         self.setMouseTracking(True)
         self.setFixedWidth(260)
         self.setFixedHeight(140)
-        pos = cfg.get("position", [100, 100])
-        self.move(pos[0], pos[1])
+        pos = self._resolve_start_position(cfg.get("position", [100, 100]))
+        self.move(*pos)
+        if cfg.get("position") != list(pos):
+            cfg["position"] = list(pos)
+            save_config(cfg)
         self.setWindowOpacity(cfg.get("opacity", 0.85))
 
         self._timer = QTimer(self)
@@ -298,6 +301,37 @@ class TokenWidget(QWidget):
         self._setup_tray()
 
         QTimer.singleShot(500, self._do_fetch)
+
+    def _resolve_start_position(self, raw_position) -> tuple[int, int]:
+        """Keep a previously saved position visible after monitor changes."""
+        try:
+            position = (int(raw_position[0]), int(raw_position[1]))
+        except (TypeError, ValueError, IndexError):
+            position = (100, 100)
+
+        window_rect = QRect(position[0], position[1], self.width(), self.height())
+        minimum_visible = 20
+        for screen in QApplication.screens():
+            visible_part = window_rect.intersected(screen.availableGeometry())
+            if (
+                visible_part.width() >= minimum_visible
+                and visible_part.height() >= minimum_visible
+            ):
+                return position
+
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return (100, 100)
+
+        available = screen.availableGeometry()
+        margin = 20
+        x = available.left() + min(
+            100, max(0, available.width() - self.width() - margin)
+        )
+        y = available.top() + min(
+            100, max(0, available.height() - self.height() - margin)
+        )
+        return (x, y)
 
     def _setup_tray(self):
         """Initialize system tray icon and menu."""
