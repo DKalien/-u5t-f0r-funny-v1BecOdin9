@@ -1,5 +1,8 @@
 import json
 import os
+import sqlite3
+from copy import deepcopy
+import tempfile
 
 DEFAULT_CONFIG = {
     "cookie": "",
@@ -17,21 +20,205 @@ DEFAULT_CONFIG = {
     "display_mode": "mimo",
 }
 
-CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".mimo-widget")
-CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+# Default external project data directory (Windows path by design).
+_DEFAULT_PROJECT_DATA_DIR = os.path.join("D:\\python\\data", "mimo-token-monitor")
+
+_DB_NAME = "settings.db"
+_SETTINGS_TABLE = "settings"
+_PRAGMAS = [
+    "PRAGMA journal_mode=DELETE;",
+    "PRAGMA busy_timeout=5000;",
+]
 
 
-def load_config() -> dict:
-    if not os.path.exists(CONFIG_PATH):
-        return dict(DEFAULT_CONFIG)
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    merged = dict(DEFAULT_CONFIG)
+def _legacy_config_dir() -> str:
+    """Return legacy config dir; overridable for tests."""
+    override = os.environ.get("MIMO_LEGACY_CONFIG_DIR")
+    return override or os.path.join(os.path.expanduser("~"), ".mimo-widget")
+
+
+def _legacy_config_path() -> str:
+    return os.path.join(_legacy_config_dir(), "config.json")
+
+
+def _project_data_dir() -> str:
+    """Return the external project data directory (may be overridden by env).
+
+    This function only returns a path; it never creates directories here.
+    """
+    override = os.environ.get("MIMO_TOKEN_MONITOR_DATA_DIR")
+    return override or _DEFAULT_PROJECT_DATA_DIR
+
+
+def _db_path() -> str:
+    return os.path.join(_project_data_dir(), _DB_NAME)
+
+
+def _ensure_db(conn: sqlite3.Connection) -> None:
+    """Ensure the settings schema exists on an open connection."""
+    with conn:
+        for pragma in _PRAGMAS:
+            conn.execute(pragma)
+        conn.execute(
+            f"CREATE TABLE IF NOT EXISTS {_SETTINGS_TABLE} ("
+            "key TEXT PRIMARY KEY,"
+            "value_json TEXT NOT NULL"
+            ");"
+        )
+
+
+def _open_db(path: str) -> sqlite3.Connection | None:
+    """Try to open and initialize a SQLite database; return None on failure."""
+    conn = None
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        conn = sqlite3.connect(path)
+        _ensure_db(conn)
+        return conn
+    except Exception:
+        if conn is not None:
+            conn.close()
+        return None
+
+
+def _read_db_config(conn: sqlite3.Connection) -> dict | None:
+    """Read a complete config from SQLite.
+
+    Returns None when the table is empty or a row cannot be parsed.
+    """
+    try:
+        with conn:
+            rows = conn.execute(
+                f"SELECT key, value_json FROM {_SETTINGS_TABLE}"
+            ).fetchall()
+    except Exception:
+        return None
+
+    if not rows:
+        return None
+
+    cfg: dict = {}
+    for key, value_json in rows:
+        try:
+            value = json.loads(value_json)
+        except Exception:
+            return None
+        cfg[key] = value
+
+    merged = deepcopy(DEFAULT_CONFIG)
     merged.update(cfg)
     return merged
 
 
-def save_config(cfg: dict):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
+def _write_db_config(conn: sqlite3.Connection, cfg: dict) -> bool:
+    """Replace settings table contents with cfg atomically.
+
+    Returns True on success, False on failure.
+    """
+    merged = deepcopy(DEFAULT_CONFIG)
+    merged.update(cfg)
+    try:
+        items = [(k, json.dumps(v, ensure_ascii=False)) for k, v in merged.items()]
+        with conn:
+            conn.execute(f"DELETE FROM {_SETTINGS_TABLE}")
+            conn.executemany(
+                f"INSERT INTO {_SETTINGS_TABLE}(key, value_json) VALUES (?, ?)",
+                items,
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _read_legacy_json() -> dict | None:
+    """Read legacy ~/.mimo-widget/config.json if available."""
+    path = _legacy_config_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        if not isinstance(cfg, dict):
+            return None
+        merged = deepcopy(DEFAULT_CONFIG)
+        merged.update(cfg)
+        return merged
+    except Exception:
+        return None
+
+
+def _atomic_save_json(path: str, cfg: dict) -> bool:
+    """Save JSON config atomically using tmp + os.replace."""
+    tmp_path = None
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            prefix=".mimo-config-", suffix=".tmp", dir=parent or "."
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+        os.replace(tmp_path, path)
+        tmp_path = None
+        return True
+    except Exception:
+        return False
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def load_config() -> dict:
+    """Load config from external SQLite, fallback to legacy JSON / defaults.
+
+    - External DB empty or unavailable -> migrate from legacy JSON when present.
+    - Returns DEFAULT_CONFIG-merged dict; callers do not need to merge again.
+    """
+    path = _db_path()
+    conn = _open_db(path)
+    if conn is not None:
+        try:
+            cfg = _read_db_config(conn)
+            if cfg is not None:
+                return cfg
+
+            legacy = _read_legacy_json()
+            if legacy is not None:
+                if _write_db_config(conn, legacy):
+                    cfg_after = _read_db_config(conn)
+                    if cfg_after is not None:
+                        return cfg_after
+                return legacy
+
+            return deepcopy(DEFAULT_CONFIG)
+        finally:
+            conn.close()
+
+    legacy = _read_legacy_json()
+    if legacy is not None:
+        return legacy
+
+    return deepcopy(DEFAULT_CONFIG)
+
+
+def save_config(cfg: dict) -> None:
+    """Save config to external SQLite, fallback to legacy JSON atomically."""
+    path = _db_path()
+    conn = _open_db(path)
+    if conn is not None:
+        try:
+            ok = _write_db_config(conn, cfg)
+            if ok:
+                return
+        finally:
+            conn.close()
+
+    merged = deepcopy(DEFAULT_CONFIG)
+    merged.update(cfg)
+    _atomic_save_json(_legacy_config_path(), merged)

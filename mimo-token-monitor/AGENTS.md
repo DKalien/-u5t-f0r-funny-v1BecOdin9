@@ -27,7 +27,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 7 个 Python 模块，单目录扁平结构：
 
 - **main.py** — 入口。单实例检查（Windows Mutex），创建 `QApplication`，加载配置，首次运行无 Cookie 时弹出 `SettingsDialog`，然后启动 `TokenWidget`。
-- **config.py** — 配置管理。JSON 文件存储于 `~/.mimo-widget/config.json`，字段：`cookie`、`refresh_interval`（默认 300s）、`opacity`（默认 0.85）、`position`、`always_on_top`（默认 true）、`daily_baseline_date`（今日基准日期）、`daily_baseline_usage`（今日基准用量）。
+- **config.py** — 配置管理。默认存储于外置 SQLite `D:\python\data\mimo-token-monitor\settings.db`，可由 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖；首次运行会从旧的 `~/.mimo-widget/config.json` 迁移，外置库不可用时保留 JSON 回退。字段：`cookie`、`refresh_interval`（默认 300s）、`opacity`（默认 0.85）、`position`、`always_on_top`（默认 true）、`daily_baseline_date`（今日基准日期）、`daily_baseline_usage`（今日基准用量）。
 - **api_client.py** — API 客户端。`fetch_balance()` 和 `fetch_usage()` 两个函数。`fetch_usage()` 会依次尝试多个 endpoint 直到成功。
 - **cookie_reader.py** — 浏览器 Cookie 自动读取。优先通过 CDP 从运行中的浏览器读取明文 Cookie（绕过 v20 加密），回退到 `browser_cookie3` 读取本地数据库。设置对话框「从浏览器导入」按钮调用此模块。
 - **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）。

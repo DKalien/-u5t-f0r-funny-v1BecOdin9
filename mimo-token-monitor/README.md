@@ -146,8 +146,16 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - claude-hud 每 ~300ms 读取快照并显示
 - 本程序关闭后，快照不再更新，claude-hud 在快照过期后停止显示 MIMO
 
+## 数据存储与跨设备同步
+
+- 默认配置存储在外置 SQLite 文件：`D:\python\data\mimo-token-monitor\settings.db`（单表 `settings`，每行一个配置键）。
+- 可通过环境变量 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖数据目录，适用于跨设备盘符/路径不一致的场景。
+- 首次运行时，如果外置库无配置且旧文件 `~/.mimo-widget/config.json` 存在，会自动读取并迁移；旧文件保留，但不再作为主配置来源。
+- **敏感数据提示**：数据库中会包含 Cookie、API Key 等明文凭据，请勿将数据目录提交到公开仓库。
+- **跨设备同步提示**：若使用同步盘/网盘同步数据目录，请避免两台设备同时运行本程序写入同一个 `settings.db`；切换设备前建议先退出应用。
+
 ## 隐私
 
 - 配置与快照本地存储；未启用 API Usage 时不请求第三方服务
-- Cookie 明文存储在 `~/.mimo-widget/config.json`
+- Cookie、API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 API Usage 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
