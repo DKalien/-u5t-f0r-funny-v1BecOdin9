@@ -191,7 +191,7 @@ class SettingsDialog(QDialog):
             "手动导入: F12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n"
             "有效期至: 手动填写套餐到期日期，例如 2026-08-31\n"
             "快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量\n"
-            "API Usage: 填写 Base URL 和 API Key 后可在标题栏下拉切换到第三方用量显示\n"
+            "API Usage: 填写 Base URL 和 API Key 后可点击标题栏切换图标显示第三方用量\n"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
@@ -270,7 +270,7 @@ class TokenWidget(QWidget):
 
         # Third-party usage state
         self._tp_data = None
-        self._dropdown_rect = QRect()
+        self._switch_rect = QRect()
 
         # Always-on-top: controlled by cfg; default True for backward compat
         self._always_on_top = cfg.get("always_on_top", True)
@@ -348,7 +348,7 @@ class TokenWidget(QWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
 
-        # Title + dropdown icon
+        # Title + display mode switch icon
         display_mode = self.cfg.get("display_mode", "mimo")
         font_title = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         p.setFont(font_title)
@@ -356,14 +356,14 @@ class TokenWidget(QWidget):
         title_text = "MiMo Token" if display_mode == "mimo" else "Usage API"
         p.drawText(16, 22, title_text)
 
-        # Dropdown icon right after title
+        # Mode switch icon right after title
         fm = p.fontMetrics()
         title_w = int(fm.horizontalAdvance(title_text))
-        dd_x = 16 + title_w + 4
-        dd_y = 22 - int(fm.ascent())
-        dd_h = int(fm.height())
-        self._dropdown_rect = QRect(int(dd_x), int(dd_y), 14, dd_h)
-        self._draw_dropdown_icon(p, self._dropdown_rect)
+        switch_x = 16 + title_w + 4
+        switch_y = 22 - int(fm.ascent())
+        switch_h = int(fm.height())
+        self._switch_rect = QRect(int(switch_x), int(switch_y), 18, switch_h)
+        self._draw_switch_icon(p, self._switch_rect)
 
         # Balance on the right (MiMo mode only)
         if display_mode == "mimo" and self._balance is not None and self._balance != 0:
@@ -606,39 +606,48 @@ class TokenWidget(QWidget):
 
         return btn_rect
 
-    def _draw_dropdown_icon(self, p: QPainter, rect: QRect):
-        """Draw a small dropdown triangle icon."""
-        cx = rect.center().x()
-        top = rect.top() + 4
-        bottom = rect.bottom() - 4
-        half_w = 4
-
+    def _draw_switch_icon(self, p: QPainter, rect: QRect):
+        """Draw a compact two-way circular-arrow display mode switch icon."""
         mouse_pos = self.mapFromGlobal(self.cursor().pos())
         hovered = rect.contains(mouse_pos)
         color = QColor(200, 200, 200) if hovered else DIM
 
+        side = min(11, int(rect.width()) - 6, int(rect.height()) - 6)
+        icon_rect = QRect(
+            int(rect.center().x() - side // 2),
+            int(rect.center().y() - side // 2),
+            int(side),
+            int(side),
+        )
+        cx = int(icon_rect.center().x())
+        cy = int(icon_rect.center().y())
+
+        p.save()
+        p.setPen(QPen(color, 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawArc(icon_rect, 35 * 16, 135 * 16)
+        p.drawArc(icon_rect, 215 * 16, 135 * 16)
+
+        # Arrowheads point into the two gaps, making the cycle direction clear.
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QBrush(color))
-        triangle = QPolygonF([
-            QPointF(cx - half_w, top),
-            QPointF(cx + half_w, top),
-            QPointF(cx, bottom),
-        ])
-        p.drawPolygon(triangle)
+        p.drawPolygon(QPolygonF([
+            QPointF(cx + 3, cy - 4),
+            QPointF(cx + 6, cy - 3),
+            QPointF(cx + 4, cy - 1),
+        ]))
+        p.drawPolygon(QPolygonF([
+            QPointF(cx - 3, cy + 4),
+            QPointF(cx - 6, cy + 3),
+            QPointF(cx - 4, cy + 1),
+        ]))
+        p.restore()
 
-    def _show_display_mode_menu(self):
-        """Show dropdown menu for switching display mode."""
-        menu = QMenu(self)
-        mimo_act = QAction("MiMo Token", self)
-        mimo_act.triggered.connect(lambda: self._set_display_mode("mimo"))
-        menu.addAction(mimo_act)
-        tp_act = QAction("API Usage", self)
-        tp_act.triggered.connect(lambda: self._set_display_mode("third_party"))
-        menu.addAction(tp_act)
-        menu.exec(self.mapToGlobal(QPoint(
-            self._dropdown_rect.x(),
-            self._dropdown_rect.bottom() + 2,
-        )))
+    def _toggle_display_mode(self):
+        """Cycle directly between MiMo Token and API Usage display modes."""
+        current_mode = self.cfg.get("display_mode", "mimo")
+        next_mode = "third_party" if current_mode == "mimo" else "mimo"
+        self._set_display_mode(next_mode)
 
     def _set_display_mode(self, mode: str):
         """Switch display mode and refresh."""
@@ -730,9 +739,9 @@ class TokenWidget(QWidget):
     # ── Mouse events ────────────────────────────────────────────
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
-            # 检测是否点击下拉菜单
-            if hasattr(self, '_dropdown_rect') and self._dropdown_rect.contains(e.pos()):
-                self._show_display_mode_menu()
+            # 检测是否点击显示模式切换图标
+            if hasattr(self, '_switch_rect') and self._switch_rect.contains(e.pos()):
+                self._toggle_display_mode()
                 e.accept()
                 return
             # 检测是否点击置顶按钮
@@ -830,7 +839,7 @@ class TokenWidget(QWidget):
                 on_btn = True
             if hasattr(self, '_pin_btn_rect') and self._pin_btn_rect.contains(pos):
                 on_btn = True
-            if hasattr(self, '_dropdown_rect') and self._dropdown_rect.contains(pos):
+            if hasattr(self, '_switch_rect') and self._switch_rect.contains(pos):
                 on_btn = True
             new_cursor = Qt.CursorShape.PointingHandCursor if on_btn else Qt.CursorShape.ArrowCursor
             if self.cursor().shape() != new_cursor:
