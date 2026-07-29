@@ -149,6 +149,41 @@ class TestGitBoundary(unittest.TestCase):
         self.assertIn("ordinary-diagnostic", clean)
         self.assertIn("https://***:***@example.test/b", clean)
 
-    def test_non_sensitive_diagnostic_is_preserved(self):
-        detail = "fatal: repository unavailable; hint: check ordinary value"
-        self.assertEqual(_sanitize_detail(detail), detail)
+    def test_sensitive_naked_credentials_and_any_scheme_urls_are_redacted(self):
+        detail = (
+            "token=abc access_token: def remote token ghi "
+            "password jkl passwd=mno api_key: pqr apikey stu "
+            "secret=vwx credential: yz auth tokenvalue "
+            "ssh://user:password@host/path "
+            "ftp://ftpuser:ftppass@example.test/file "
+            "http://httpuser:httppass@example.test/path ordinary-diagnostic"
+        )
+        clean = _sanitize_detail(detail)
+        for sensitive in (
+            "abc", "def", "ghi", "jkl", "mno", "pqr", "stu", "vwx", "yz",
+            "tokenvalue", "user", "ftpuser", "ftppass",
+            "httpuser", "httppass",
+        ):
+            self.assertNotIn(sensitive, clean)
+        self.assertIn("remote token ***", clean)
+        self.assertIn("ssh://***:***@host/path", clean)
+        self.assertIn("ftp://***:***@example.test/file", clean)
+        self.assertIn("ordinary-diagnostic", clean)
+
+
+class TestRelativeRepositoryRoot(unittest.TestCase):
+    def test_relative_repo_root_matches_resolved_git_root(self):
+        with tempfile.TemporaryDirectory(prefix="mimo_relative_git_", dir=Path.cwd()) as tmp:
+            repo = Path(tmp) / "data"
+            data_dir = repo / "mimo-token-monitor"
+            data_dir.mkdir(parents=True)
+            relative_root = Path(os.path.relpath(repo, Path.cwd()))
+            config = SyncConfig(
+                repo_root=relative_root,
+                data_dir=data_dir,
+                db_path=data_dir / "settings.db",
+            )
+            runner = Mock(return_value=subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=f"{repo.resolve()}\n".encode(), stderr=b""
+            ))
+            self.assertIsNone(DataSyncService(config, runner=runner).validate_repository())
