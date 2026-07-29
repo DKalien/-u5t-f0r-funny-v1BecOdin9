@@ -263,6 +263,48 @@ class GitRepoFixture:
         )
 
 
+
+
+class TestPushLocalDatabase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mimo_push_")
+        self.fixture = GitRepoFixture(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_push_changes_only_target_and_preserves_other_worktree_changes(self):
+        repo = self.fixture.repo
+        db = repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local-exit")
+        other = repo / "financial-data-backup" / "keep.txt"
+        other.write_text("local-uncommitted", encoding="utf-8")
+        untracked = repo / "financial-data-backup" / "running.tmp"
+        untracked.write_text("busy", encoding="utf-8")
+        status_before = run_git(repo, "status", "--porcelain=v1").stdout
+        index_before = run_git(repo, "write-tree").stdout
+
+        result = DataSyncService(self.fixture.config()).push_local_database()
+
+        self.assertEqual(result.status, SyncStatus.SUCCESS)
+        self.assertEqual(run_git(repo, "status", "--porcelain=v1").stdout, status_before)
+        self.assertEqual(run_git(repo, "write-tree").stdout, index_before)
+        changed = run_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r",
+                          "refs/remotes/origin/main").stdout.decode().splitlines()
+        self.assertEqual(changed, ["mimo-token-monitor/settings.db"])
+        self.assertEqual(other.read_text(encoding="utf-8"), "local-uncommitted")
+        self.assertEqual(untracked.read_text(encoding="utf-8"), "busy")
+
+    def test_unchanged_database_creates_no_commit(self):
+        service = DataSyncService(self.fixture.config())
+        before = run_git(self.fixture.repo, "rev-parse", "refs/remotes/origin/main").stdout
+        result = service.push_local_database()
+        after = run_git(self.fixture.repo, "rev-parse", "refs/remotes/origin/main").stdout
+        self.assertEqual(result.status, SyncStatus.NO_CHANGE)
+        self.assertEqual(after, before)
+
+
 class TestPullRemoteDatabase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="mimo_pull_")
