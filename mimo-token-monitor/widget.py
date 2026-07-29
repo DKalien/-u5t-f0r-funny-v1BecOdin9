@@ -927,8 +927,13 @@ class TokenWidget(QWidget):
 
     def show_sync_result(self, result):
         """Show a non-blocking tray notification for a sync result."""
+        title = {
+            "code_pull": "MiMo 代码仓库同步",
+            "code_push": "MiMo 代码仓库同步",
+            "startup": "MiMo 启动同步",
+        }.get(result.stage, "MiMo 设置同步")
         self._tray_icon.showMessage(
-            "MiMo 设置同步",
+            title,
             result.message,
             QSystemTrayIcon.MessageIcon.Warning,
             5000,

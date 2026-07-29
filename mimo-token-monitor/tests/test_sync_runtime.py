@@ -87,6 +87,17 @@ class TestStartupRuntime(unittest.TestCase):
         self.assertEqual(result.status, SyncStatus.SUCCESS)
         self.assertEqual(calls, ["sync", "load", "show"])
 
+    def test_combined_successful_startup_sync_is_not_reported_as_warning(self):
+        from main import _combine_startup_results
+
+        result = _combine_startup_results(
+            SyncResult(SyncStatus.SUCCESS, "pull", "db pulled"),
+            SyncResult(SyncStatus.NO_CHANGE, "code_pull", "code unchanged"),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.status, SyncStatus.SUCCESS)
+
 
 class FakePushService:
     def __init__(self, result):
@@ -94,6 +105,16 @@ class FakePushService:
         self.calls = 0
 
     def push_local_database(self):
+        self.calls += 1
+        return self.result
+
+
+class FakeCodePush:
+    def __init__(self, result):
+        self.result = result
+        self.calls = 0
+
+    def push_local_changes(self):
         self.calls += 1
         return self.result
 
@@ -118,6 +139,29 @@ class TestExitRuntime(unittest.TestCase):
 
         self.assertEqual(service.calls, 1)
         notify_callback.assert_called_once()
+        quit_callback.assert_called_once()
+
+    def test_exit_runs_database_and_code_push_before_quitting(self):
+        database = FakePushService(SyncResult(SyncStatus.NO_CHANGE, "push", "db unchanged"))
+        code = FakeCodePush(SyncResult(SyncStatus.SUCCESS, "code_push", "code pushed"))
+        quit_callback = Mock()
+        notify_callback = Mock()
+        controller = ExitSyncController(
+            database,
+            quit_callback,
+            notify_callback,
+            additional_operations=[code.push_local_changes],
+        )
+        loop = QEventLoop()
+        controller.finished.connect(lambda _result: loop.quit())
+
+        controller.request_exit()
+        QTimer.singleShot(5000, loop.quit)
+        loop.exec()
+
+        self.assertEqual(database.calls, 1)
+        self.assertEqual(code.calls, 1)
+        notify_callback.assert_not_called()
         quit_callback.assert_called_once()
 
     def test_no_service_quits_immediately(self):

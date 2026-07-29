@@ -20,12 +20,13 @@
 - **第三方用量 API 显示**：标题栏下拉菜单可切换 MiMo Token / API Usage 模式，支持配置第三方 Usage API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 - **设置数据库 Git 同步**：程序启动时、窗口显示前拉取远端 `mimo-token-monitor/settings.db`，真正退出时仅提交并推送该文件；关闭到托盘不推送
+- **代码项目 Git 同步**：启动器启动 Python 前检查并快进拉取代码仓库；真正退出时检查 `mimo-token-monitor/` 是否有改动，有改动才提交并推送
 
 ## 使用方式
 
 ### 方式一：轻量启动器 EXE（推荐）
 
-双击 `dist\MiMo-Token-Monitor.exe`，程序会在后台运行，不显示控制台窗口。这个 exe 只负责启动项目根目录中的 `main.py`；源码、配置和日志仍使用项目现有文件。
+双击 `dist\MiMo-Token-Monitor.exe`，程序会在后台运行，不显示控制台窗口。启动器会先检查代码项目仓库并拉取可安全快进的更新，再启动项目根目录中的 `main.py`；源码、配置和日志仍使用项目现有文件。
 
 **修改任意 Python 源码后，直接重启 exe 即可生效，无需重新打包。** 仅首次使用需要在本机安装 Python 与项目依赖：
 
@@ -161,7 +162,14 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - 只有托盘或悬浮窗菜单中的“退出”会推送；最小化到托盘不会推送。
 - 退出时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
 - 推送失败时本地数据库保持不变，程序仍正常退出。
-- 程序不会对共享仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
+- 设置数据库同步不会对共享数据仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
+
+### 代码项目仓库同步
+
+- 代码仓库默认是当前源码目录的父级 Git 仓库，默认远端和分支为 `origin/main`；当前项目目录为 `mimo-token-monitor/`。
+- 启动器在创建 Python 子进程前执行 `fetch`，工作区干净且本地分支落后时才执行 `merge --ff-only`；本地有未提交修改、分支已分叉、Git/网络失败时保留本地代码并继续启动。
+- 真正退出时，如果 `mimo-token-monitor/` 有修改，程序只对该目录执行 `git add`、提交和推送；仓库其他目录的修改不会被暂存或提交。远端在程序运行期间产生新提交时，不自动覆盖或强行合并本地代码，保留改动并正常退出。
+- 关闭窗口到托盘不会触发代码提交推送；启动器已经同步的结果会传给 GUI，失败原因通过托盘通知显示。直接运行 `python main.py` 时，`main.py` 也会执行同样的启动兜底检查。
 
 可用环境变量：
 
@@ -173,6 +181,17 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 | `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每次启动/退出同步的总 Git 操作预算秒数 |
 | `MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES` | `3` | 最多 push 尝试次数；默认 `3` 表示首次尝试加最多 2 次重试 |
 
+代码仓库同步可用环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `MIMO_TOKEN_MONITOR_CODE_REPO_ROOT` | 源码目录父目录 | 覆盖代码仓库根目录 |
+| `MIMO_TOKEN_MONITOR_CODE_PROJECT_PATH` | 自动推导 | 代码项目相对仓库路径，当前为 `mimo-token-monitor` |
+| `MIMO_TOKEN_MONITOR_CODE_GIT_REMOTE` | `origin` | 代码仓库远端名 |
+| `MIMO_TOKEN_MONITOR_CODE_GIT_BRANCH` | `main` | 代码仓库分支名 |
+| `MIMO_TOKEN_MONITOR_CODE_GIT_TIMEOUT_SECONDS` | `30` | 每次启动/退出代码同步的总 Git 操作预算秒数 |
+| `MIMO_TOKEN_MONITOR_CODE_SYNC_ENABLED` | `true` | 是否启用代码仓库同步 |
+
 ## 隐私
 
 - 配置默认存于本地 SQLite，并按上文 Git 策略同步；快照文件本地存储；未启用 API Usage 时不请求第三方服务
@@ -181,4 +200,4 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 
 ### Git 同步超时
-启动拉取和真正退出推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时；本地 SQLite、文件写入等阶段在阶段完成后检查预算，不承诺抢占正在执行的系统调用。
+设置数据库启动拉取和真正退出推送各自使用一个总 operation deadline，默认 30 秒；代码仓库同步也有独立的 30 秒预算。每个预算由本次操作的所有 Git 命令共享，并非每条命令单独计时；本地文件操作在阶段完成后检查预算，不承诺抢占正在执行的系统调用。

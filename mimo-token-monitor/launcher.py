@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Sequence
+
+from code_sync import (
+    CODE_SYNC_RESULT_ENV,
+    encode_sync_result,
+    run_startup_code_sync,
+)
 
 
 APP_NAME = "MiMo Token Monitor"
@@ -58,11 +65,21 @@ def local_python_candidates(project_root: Path) -> list[list[str]]:
     return unique
 
 
-def start_monitor(command: Sequence[str], project_root: Path) -> None:
+def start_monitor(
+    command: Sequence[str],
+    project_root: Path,
+    startup_code_sync_result=None,
+) -> None:
+    child_env = os.environ.copy()
+    if startup_code_sync_result is not None:
+        child_env[CODE_SYNC_RESULT_ENV] = encode_sync_result(
+            startup_code_sync_result
+        )
     subprocess.Popen(
         [*command, str(project_root / "main.py")],
         cwd=project_root,
         creationflags=CREATE_NO_WINDOW,
+        env=child_env,
     )
 
 
@@ -74,9 +91,13 @@ def main() -> int:
         )
         return 1
 
+    # Pull before spawning Python so the child imports the freshly updated
+    # source files.  A failed/unsafe pull is passed to the GUI for a warning;
+    # the existing local checkout remains the fallback.
+    startup_code_sync_result = run_startup_code_sync(project_root)
     for command in local_python_candidates(project_root):
         try:
-            start_monitor(command, project_root)
+            start_monitor(command, project_root, startup_code_sync_result)
             return 0
         except OSError:
             continue

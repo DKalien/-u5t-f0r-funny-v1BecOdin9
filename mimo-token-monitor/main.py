@@ -1,11 +1,20 @@
 import ctypes
+import os
 import sys
 from ctypes import wintypes
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QDialog
 
 from config import load_config, save_config
+from code_sync import (
+    CODE_SYNC_RESULT_ENV,
+    CodeSyncConfig,
+    CodeSyncService,
+    decode_sync_result,
+    run_startup_code_sync,
+)
 from data_sync import DataSyncService, SyncConfig, SyncResult, SyncStatus
 from sync_runtime import ExitSyncController, run_startup_sync
 from widget import SettingsDialog, TokenWidget
@@ -79,11 +88,63 @@ def build_sync_service() -> tuple[DataSyncService | None, SyncResult | None]:
         return None, SyncResult(SyncStatus.SKIPPED, "config", str(exc))
 
 
-def initialize_window(app, service):
-    startup_result = (
+def build_code_sync_service() -> CodeSyncService | None:
+    try:
+        service = CodeSyncService(
+            CodeSyncConfig.from_project_root(Path(__file__).resolve().parent)
+        )
+        return service if service.config.enabled else None
+    except (OSError, ValueError):
+        return None
+
+
+def _read_startup_code_sync_result() -> SyncResult:
+    encoded = os.environ.pop(CODE_SYNC_RESULT_ENV, "")
+    if encoded:
+        result = decode_sync_result(encoded)
+        if result is not None:
+            return result
+    return run_startup_code_sync(Path(__file__).resolve().parent)
+
+
+def _combine_startup_results(*results: SyncResult | None) -> SyncResult:
+    actual = [result for result in results if result is not None]
+    if len(actual) == 1:
+        return actual[0]
+    if not actual:
+        return SyncResult(SyncStatus.NO_CHANGE, "startup", "启动同步已完成")
+    if all(result.ok for result in actual):
+        return SyncResult(
+            SyncStatus.SUCCESS,
+            "startup",
+            "代码仓库和设置数据库已检查",
+        )
+
+    failed = [result for result in actual if result.status == SyncStatus.FAILED]
+    not_ok = [result for result in actual if not result.ok]
+    status = SyncStatus.FAILED if failed else SyncStatus.SKIPPED
+    message = "；".join(result.message for result in not_ok)
+    if not message:
+        message = "代码仓库和设置数据库已检查"
+    detail = " | ".join(result.detail for result in not_ok if result.detail)
+    return SyncResult(status, "startup", message, detail)
+
+
+def initialize_window(
+    app,
+    service,
+    code_service=None,
+    code_sync_result=None,
+    config_result=None,
+):
+    data_result = (
         run_startup_sync(service, app)
         if service is not None
         else SyncResult(SyncStatus.SKIPPED, "config", "同步配置无效")
+    )
+    startup_result = _combine_startup_results(
+        config_result or data_result,
+        code_sync_result,
     )
     cfg = load_config()
 
@@ -102,6 +163,9 @@ def initialize_window(app, service):
         widget.finish_quit,
         widget.show_sync_result,
         parent=widget,
+        additional_operations=(
+            [code_service.push_local_changes] if code_service is not None else []
+        ),
     )
     widget._exit_callback = controller.request_exit
     widget._exit_sync_controller = controller
@@ -117,15 +181,21 @@ def main() -> int:
         activate_existing_instance()
         return 0
 
+    code_startup_result = _read_startup_code_sync_result()
+    code_service = build_code_sync_service()
     activation_event = create_activation_event()
     try:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
 
         service, config_result = build_sync_service()
-        widget, startup_result = initialize_window(app, service)
-        if config_result is not None:
-            startup_result = config_result
+        widget, startup_result = initialize_window(
+            app,
+            service,
+            code_service=code_service,
+            code_sync_result=code_startup_result,
+            config_result=config_result,
+        )
         if widget is None:
             return 0
 

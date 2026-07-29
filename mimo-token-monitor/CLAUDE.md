@@ -35,9 +35,10 @@ Python 模块采用单目录扁平结构：
 - **window_snap.py** — Win32 顶层窗口枚举、窗口标题筛选、Qt 逻辑坐标与 Win32 物理像素坐标转换，以及跨屏跨窗口边框吸附的纯几何计算。
 - **snapshot_writer.py** — 快照写入。为 claude-hud 生成用量快照 JSON 文件，包含余额、用量、今日用量等信息。
 - **data_sync.py** — 以 Git plumbing、临时 index 和 SQLite 校验同步唯一目标 `mimo-token-monitor/settings.db`，不得操作共享仓库其他路径。
-- **sync_runtime.py** — 用 QThread 编排启动拉取与真正退出推送，保证 Git 网络操作不阻塞 Qt 主线程。
+- **code_sync.py** — 检查并同步代码项目 `mimo-token-monitor/`；启动只允许干净工作区快进，退出只提交该项目目录。
+- **sync_runtime.py** — 用 QThread 编排数据库与代码的真正退出推送，保证 Git 网络操作不阻塞 Qt 主线程。
 
-数据流：`main.py` → `data_sync.py` 在程序启动时、窗口显示前拉取 → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制；真正退出时由 `sync_runtime.py` 在后台推送设置。
+数据流：`launcher.py` → `code_sync.py` 检查并快进拉取代码 → 启动 `main.py` → `data_sync.py` 在窗口显示前拉取设置 → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制；直接运行 `main.py` 时会执行代码同步兜底；真正退出时由 `sync_runtime.py` 在后台依次推送设置和代码。
 
 ## 关键实现细节
 
@@ -53,6 +54,8 @@ Python 模块采用单目录扁平结构：
 - 进度条填充圆角动态调整：当填充宽度较小时，圆角半径限制为 `min(4, fill_w//2)`，避免超出外框圆角范围。
 - 今日用量计算：通过记录每天首次刷新时的月累计用量作为基准，后续刷新时计算差值得到今日用量。基准值持久化存储，程序重启不丢失数据。
 - 日常启动器：`launcher.py` 会被打包成轻量的 `dist/MiMo-Token-Monitor.exe`，从项目根目录或 `dist` 启动时读取项目中的 `main.py`。业务源码变更后只需重启启动器；只有修改启动器时才运行 `./build-launcher.ps1`。完整独立发行版仍使用 `MiMo-Token-Monitor.spec`，轻量构建不得覆盖该 spec。
+- 代码同步：启动器先在代码仓库干净且本地分支落后时执行 `fetch` + `merge --ff-only`，不会为了拉取而覆盖本地修改；退出时仅对 `mimo-token-monitor/` 执行提交推送，远端分叉或仓库外存在本地修改时跳过自动提交。
 - **红线规则**：PyQt6 在 Windows 上使用浮点数坐标调用 `QPainter.drawLine()` 会导致崩溃（退出码 `0xC0000409`），所有 UI 坐标必须使用整数。
 - 设置 Git 同步操作的每次启动拉取或真正退出推送共享一个总 operation deadline，默认 30 秒，而不是每条 Git 命令各自 30 秒；同步只允许操作 `mimo-token-monitor/settings.db`；禁止用会修改共享工作树的 `git pull`、`checkout`、`reset`、`clean` 或普通 `git commit` 替代 plumbing 实现。
 - 同步配置环境变量：`MIMO_TOKEN_MONITOR_DATA_DIR`（默认 `D:\python\data\mimo-token-monitor`）、`MIMO_TOKEN_MONITOR_GIT_REMOTE`（`origin`）、`MIMO_TOKEN_MONITOR_GIT_BRANCH`（`main`）、`MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS`（`30` 秒总预算）、`MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES`（最多 `3` 次 push 尝试）。
+- 代码同步配置环境变量：`MIMO_TOKEN_MONITOR_CODE_REPO_ROOT`、`MIMO_TOKEN_MONITOR_CODE_PROJECT_PATH`、`MIMO_TOKEN_MONITOR_CODE_GIT_REMOTE`、`MIMO_TOKEN_MONITOR_CODE_GIT_BRANCH`、`MIMO_TOKEN_MONITOR_CODE_GIT_TIMEOUT_SECONDS`、`MIMO_TOKEN_MONITOR_CODE_SYNC_ENABLED`。
