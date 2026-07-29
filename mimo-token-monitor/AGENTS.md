@@ -37,7 +37,7 @@ python -m unittest discover -s tests -v
 - **data_sync.py** — 以 Git plumbing、临时 index 和 SQLite 校验同步唯一目标 `mimo-token-monitor/settings.db`，不得操作共享仓库其他路径。
 - **sync_runtime.py** — 用 QThread 编排启动拉取与真正退出推送，保证 Git 网络操作不阻塞 Qt 主线程。
 
-数据流：`main.py` → `data_sync.py` 启动前拉取 → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制；真正退出时由 `sync_runtime.py` 在后台推送设置。
+数据流：`main.py` → `data_sync.py` 在程序启动时、窗口显示前拉取 → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制；真正退出时由 `sync_runtime.py` 在后台推送设置。
 
 ## 关键实现细节
 
