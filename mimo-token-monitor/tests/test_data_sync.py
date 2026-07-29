@@ -290,9 +290,18 @@ class TestPushLocalDatabase(unittest.TestCase):
         self.assertEqual(result.status, SyncStatus.SUCCESS)
         self.assertEqual(run_git(repo, "status", "--porcelain=v1").stdout, status_before)
         self.assertEqual(run_git(repo, "write-tree").stdout, index_before)
-        changed = run_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r",
-                          "refs/remotes/origin/main").stdout.decode().splitlines()
+        remote_commit = run_git(
+            self.fixture.remote, "rev-parse", "refs/heads/main"
+        ).stdout.decode().strip()
+        changed = run_git(
+            self.fixture.remote, "diff-tree", "--no-commit-id", "--name-only", "-r",
+            remote_commit,
+        ).stdout.decode().splitlines()
         self.assertEqual(changed, ["mimo-token-monitor/settings.db"])
+        remote_db = run_git(
+            self.fixture.remote, "show", "refs/heads/main:mimo-token-monitor/settings.db"
+        ).stdout
+        self.assertEqual(remote_db, db.read_bytes())
         self.assertEqual(other.read_text(encoding="utf-8"), "local-uncommitted")
         self.assertEqual(untracked.read_text(encoding="utf-8"), "busy")
 
