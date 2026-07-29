@@ -5,7 +5,9 @@ from enum import Enum
 import os
 from pathlib import Path, PurePosixPath
 import re
+import sqlite3
 import subprocess
+import tempfile
 from typing import Callable
 
 from config import _db_path, _project_data_dir
@@ -178,3 +180,50 @@ class DataSyncService:
         if data_dir.parent != repo_root:
             return SyncResult(SyncStatus.SKIPPED, "validate", "数据目录与仓库根目录不匹配")
         return None
+
+    @property
+    def remote_ref(self) -> str:
+        return f"refs/remotes/{self.config.remote}/{self.config.branch}"
+
+    def _validate_sqlite(self, path: Path) -> bool:
+        conn = None
+        try:
+            uri = f"{path.resolve().as_uri()}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True)
+            row = conn.execute("PRAGMA quick_check").fetchone()
+            return row == ("ok",)
+        except sqlite3.Error:
+            return False
+        finally:
+            if conn is not None:
+                conn.close()
+
+    def pull_remote_database(self) -> SyncResult:
+        invalid = self.validate_repository()
+        if invalid is not None:
+            return invalid
+        temp_path: Path | None = None
+        try:
+            self._git("fetch", self.config.remote,
+                      f"{self.config.branch}:{self.remote_ref}")
+            blob = self._git("show", f"{self.remote_ref}:{self.config.git_path}")
+            self.config.data_dir.mkdir(parents=True, exist_ok=True)
+            fd, name = tempfile.mkstemp(
+                prefix=".mimo-settings-", suffix=".tmp", dir=self.config.data_dir
+            )
+            temp_path = Path(name)
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(blob)
+                handle.flush()
+                os.fsync(handle.fileno())
+            if not self._validate_sqlite(temp_path):
+                return SyncResult(SyncStatus.FAILED, "validate_db", "远端数据库校验失败")
+            os.replace(temp_path, self.config.db_path)
+            temp_path = None
+            return SyncResult(SyncStatus.SUCCESS, "pull", "已载入远端悬浮窗设置")
+        except (GitCommandError, OSError) as exc:
+            detail = exc.detail if isinstance(exc, GitCommandError) else _sanitize_detail(str(exc))
+            return SyncResult(SyncStatus.FAILED, "pull", str(exc), detail)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
