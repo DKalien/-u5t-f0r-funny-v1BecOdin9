@@ -204,6 +204,11 @@ class DataSyncService:
     def remote_ref(self) -> str:
         return f"refs/remotes/{self.config.remote}/{self.config.branch}"
 
+    def _ensure_time_remaining(self, deadline: float) -> None:
+        """Stop before the next phase once the operation budget is exhausted."""
+        if deadline - time.monotonic() <= 0:
+            raise GitCommandError("Git 同步总预算已耗尽", "deadline exhausted")
+
     def _validate_sqlite(self, path: Path) -> bool:
         conn = None
         try:
@@ -263,9 +268,14 @@ class DataSyncService:
         invalid = self.validate_repository(deadline)
         if invalid is not None:
             return invalid
-        if not self.config.db_path.is_file() or not self._validate_sqlite(self.config.db_path):
-            return SyncResult(SyncStatus.FAILED, "validate_db", "本地数据库不存在或校验失败")
         try:
+            self._ensure_time_remaining(deadline)
+            if not self.config.db_path.is_file():
+                return SyncResult(SyncStatus.FAILED, "validate_db", "本地数据库不存在或校验失败")
+            valid_sqlite = self._validate_sqlite(self.config.db_path)
+            self._ensure_time_remaining(deadline)
+            if not valid_sqlite:
+                return SyncResult(SyncStatus.FAILED, "validate_db", "本地数据库不存在或校验失败")
             for attempt in range(1, self.config.push_retries + 1):
                 self._git(
                     "fetch", self.config.remote,
@@ -309,7 +319,9 @@ class DataSyncService:
             self._git("fetch", self.config.remote,
                       f"{self.config.branch}:{self.remote_ref}", deadline=deadline)
             blob = self._git("show", f"{self.remote_ref}:{self.config.git_path}", deadline=deadline)
+            self._ensure_time_remaining(deadline)
             self.config.data_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_time_remaining(deadline)
             fd, name = tempfile.mkstemp(
                 prefix=".mimo-settings-", suffix=".tmp", dir=self.config.data_dir
             )
@@ -326,8 +338,12 @@ class DataSyncService:
                 handle.write(blob)
                 handle.flush()
                 os.fsync(handle.fileno())
-            if not self._validate_sqlite(temp_path):
+            self._ensure_time_remaining(deadline)
+            valid_sqlite = self._validate_sqlite(temp_path)
+            self._ensure_time_remaining(deadline)
+            if not valid_sqlite:
                 return SyncResult(SyncStatus.FAILED, "validate_db", "远端数据库校验失败")
+            self._ensure_time_remaining(deadline)
             os.replace(temp_path, self.config.db_path)
             temp_path = None
             return SyncResult(SyncStatus.SUCCESS, "pull", "已载入远端悬浮窗设置")
