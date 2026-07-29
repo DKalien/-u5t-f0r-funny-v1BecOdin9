@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from contextlib import contextmanager
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -13,6 +14,7 @@ from typing import Callable
 from config import _db_path, _project_data_dir
 
 _ALLOWED_GIT_PATH = "mimo-token-monitor/settings.db"
+_COMMIT_MESSAGE = "chore(mimo-token-monitor): 同步悬浮窗设置"
 
 
 class GitCommandError(RuntimeError):
@@ -197,6 +199,66 @@ class DataSyncService:
         finally:
             if conn is not None:
                 conn.close()
+
+
+    @contextmanager
+    def _temporary_index(self):
+        fd, name = tempfile.mkstemp(prefix="mimo-git-index-")
+        os.close(fd)
+        os.unlink(name)
+        try:
+            yield Path(name)
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def _index_env(self, index_path: Path) -> dict:
+        env = os.environ.copy()
+        env["GIT_INDEX_FILE"] = str(index_path)
+        return env
+
+    def _build_commit(self, parent: str, index_path: Path) -> str | None:
+        env = self._index_env(index_path)
+        self._git("read-tree", parent, env=env)
+        blob = self._git("hash-object", "-w", str(self.config.db_path)).decode().strip()
+        self._git(
+            "update-index", "--add", "--cacheinfo", "100644", blob,
+            self.config.git_path, env=env,
+        )
+        tree = self._git("write-tree", env=env).decode().strip()
+        parent_tree = self._git("rev-parse", f"{parent}^{{tree}}").decode().strip()
+        if tree == parent_tree:
+            return None
+        return self._git(
+            "commit-tree", tree, "-p", parent,
+            input_bytes=(_COMMIT_MESSAGE + "\n").encode("utf-8"),
+            env=env,
+        ).decode().strip()
+
+    def push_local_database(self) -> SyncResult:
+        invalid = self.validate_repository()
+        if invalid is not None:
+            return invalid
+        if not self.config.db_path.is_file() or not self._validate_sqlite(self.config.db_path):
+            return SyncResult(SyncStatus.FAILED, "validate_db", "本地数据库不存在或校验失败")
+        try:
+            self._git(
+                "fetch", self.config.remote,
+                f"{self.config.branch}:{self.remote_ref}",
+            )
+            parent = self._git("rev-parse", self.remote_ref).decode().strip()
+            with self._temporary_index() as index_path:
+                commit = self._build_commit(parent, index_path)
+            if commit is None:
+                return SyncResult(SyncStatus.NO_CHANGE, "push", "设置没有变化，无需推送")
+            self._git(
+                "push", self.config.remote,
+                f"{commit}:refs/heads/{self.config.branch}",
+            )
+            self._git("update-ref", self.remote_ref, commit)
+            return SyncResult(SyncStatus.SUCCESS, "push", "已同步本地悬浮窗设置")
+        except (GitCommandError, OSError) as exc:
+            detail = exc.detail if isinstance(exc, GitCommandError) else _sanitize_detail(str(exc))
+            return SyncResult(SyncStatus.FAILED, "push", str(exc), detail)
 
     def pull_remote_database(self) -> SyncResult:
         invalid = self.validate_repository()
