@@ -32,3 +32,11 @@
 - 未实现退出提交、push 或 Qt 集成，严格限定在 Task 3。
 - 测试 fixture 使用临时 bare Git remote，不访问真实数据目录或 GitHub。
 - Windows 下 SQLite 连接必须显式 close；生产校验与测试 helper 均已处理。
+
+## 审查修复追加
+- 修复 `os.fdopen` 获取文件对象失败时的 descriptor ownership：显式关闭未转交的 fd，并保留原始失败结果。
+- 修复临时文件清理失败处理：`finally` 捕获 `OSError`，不掩盖原有 `SyncResult`，不重试、不触碰其他路径。
+- 新增对应 mock 测试，验证 fd close、本地数据库保留及清理异常降级。
+- 修复后测试：
+  - `cd mimo-token-monitor && python -m unittest tests.test_data_sync.TestPullRemoteDatabase -v` — PASS（4 tests）
+  - `cd mimo-token-monitor && python -m unittest tests.test_data_sync tests.test_config -v` — PASS（25 tests）
