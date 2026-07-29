@@ -245,9 +245,11 @@ class SettingsDialog(QDialog):
 
 # ── Main widget ─────────────────────────────────────────────────
 class TokenWidget(QWidget):
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, exit_callback=None, startup_sync_result=None):
         super().__init__()
         self.cfg = cfg
+        self._exit_callback = exit_callback
+        self._exit_requested = False
         self._drag_pos = QPoint()
         self._last_error = ""
         self._last_update = "等待更新..."
@@ -299,6 +301,9 @@ class TokenWidget(QWidget):
 
         # 系统托盘
         self._setup_tray()
+
+        if startup_sync_result is not None and not startup_sync_result.ok:
+            QTimer.singleShot(0, lambda: self.show_sync_result(startup_sync_result))
 
         QTimer.singleShot(500, self._do_fetch)
 
@@ -910,8 +915,26 @@ class TokenWidget(QWidget):
         self.activateWindow()
         self.raise_()
 
+    def show_sync_result(self, result):
+        """Show a non-blocking tray notification for a sync result."""
+        self._tray_icon.showMessage(
+            "MiMo 设置同步",
+            result.message,
+            QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
+
     def _quit_app(self):
-        """真正退出应用程序。"""
+        """真正退出应用程序；同步期间忽略重复请求。"""
+        if self._exit_requested:
+            return
+        self._exit_requested = True
+        if self._exit_callback is not None:
+            self._exit_callback()
+        else:
+            self.finish_quit()
+
+    def finish_quit(self):
         self._tray_icon.hide()
         QApplication.quit()
 
