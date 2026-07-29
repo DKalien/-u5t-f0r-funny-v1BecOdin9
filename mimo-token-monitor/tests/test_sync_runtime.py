@@ -196,5 +196,3 @@ class TestLifecycleDegradation(unittest.TestCase):
         activate.assert_called_once()
         build_service.assert_not_called()
         run_sync.assert_not_called()
-
-
