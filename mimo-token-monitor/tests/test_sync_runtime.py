@@ -2,6 +2,7 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import unittest
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtGui import QCloseEvent
@@ -10,6 +11,19 @@ from PyQt6.QtWidgets import QApplication
 from data_sync import SyncResult, SyncStatus
 from sync_runtime import ExitSyncController, run_startup_sync
 from widget import TokenWidget
+
+
+@contextmanager
+def managed_widget(cfg, **kwargs):
+    with patch("widget.save_config"), patch.object(TokenWidget, "_do_fetch"):
+        widget = TokenWidget(cfg, **kwargs)
+        try:
+            yield widget
+        finally:
+            widget._timer.stop()
+            widget.close()
+            widget.deleteLater()
+            QApplication.processEvents()
 
 
 class FakeService:
@@ -107,27 +121,21 @@ class TestExitRuntime(unittest.TestCase):
         from widget import TokenWidget
 
         callback = Mock()
-        with patch("widget.save_config"), patch.object(TokenWidget, "_do_fetch"):
-            widget = TokenWidget({"position": [100, 100]})
-        widget._exit_callback = callback
-        widget._quit_app()
-        widget._quit_app()
+        with managed_widget({"position": [100, 100]}, exit_callback=callback) as widget:
+            widget._exit_callback = callback
+            widget._quit_app()
+            widget._quit_app()
         callback.assert_called_once()
-        widget.deleteLater()
 
     def test_widget_close_event_only_hides_to_tray(self):
-        from widget import TokenWidget
-
         callback = Mock()
         event = Mock()
-        with patch("widget.save_config"), patch.object(TokenWidget, "_do_fetch"):
-            widget = TokenWidget({"position": [100, 100]}, exit_callback=callback)
-        widget._tray_icon.showMessage = Mock()
-        widget.closeEvent(event)
-        event.ignore.assert_called_once()
-        callback.assert_not_called()
-        widget._tray_icon.showMessage.assert_called_once()
-        widget.deleteLater()
+        with managed_widget({"position": [100, 100]}, exit_callback=callback) as widget:
+            widget._tray_icon.showMessage = Mock()
+            widget.closeEvent(event)
+            event.ignore.assert_called_once()
+            callback.assert_not_called()
+            widget._tray_icon.showMessage.assert_called_once()
 
 
 
@@ -143,8 +151,10 @@ class TestLifecycleDegradation(unittest.TestCase):
     def test_failed_startup_sync_still_creates_widget(self, _sync, _load):
         from main import initialize_window
         with patch("main.TokenWidget") as widget_type:
+            widget_type.return_value.show = Mock()
             widget, result = initialize_window(self.app, Mock())
         self.assertIs(widget, widget_type.return_value)
+        widget_type.return_value.show.assert_called_once()
         self.assertEqual(result.status, SyncStatus.FAILED)
 
     def test_close_event_hides_without_requesting_exit(self):
@@ -169,12 +179,13 @@ class TestLifecycleDegradation(unittest.TestCase):
             widget._quit_app()
         callback.assert_called_once()
 
+    @patch("main.save_config")
     @patch("main.load_config", return_value={})
     @patch("main.run_startup_sync", return_value=SyncResult(
         SyncStatus.SKIPPED, "config", "同步配置无效"
     ))
     @patch("main.SettingsDialog")
-    def test_first_configuration_cancel_returns_safely(self, dialog_type, _sync, _load):
+    def test_first_configuration_cancel_returns_safely(self, dialog_type, _sync, _load, save_config):
         from PyQt6.QtWidgets import QDialog
         from main import initialize_window
         dialog_type.return_value.exec.return_value = QDialog.DialogCode.Rejected
@@ -183,6 +194,9 @@ class TestLifecycleDegradation(unittest.TestCase):
         self.assertIsNone(widget)
         self.assertEqual(result.status, SyncStatus.SKIPPED)
         widget_type.assert_not_called()
+        dialog_type.assert_called_once_with({})
+        dialog_type.return_value.setWindowTitle.assert_called_once_with("MiMo Token - 首次配置")
+        save_config.assert_not_called()
 
     @patch("main.run_startup_sync")
     @patch("main.build_sync_service")

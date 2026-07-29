@@ -417,6 +417,20 @@ class TestPushLocalDatabase(unittest.TestCase):
         self.assertEqual(other.read_text(encoding="utf-8"), "local-uncommitted")
         self.assertEqual(untracked.read_text(encoding="utf-8"), "busy")
 
+    def test_push_failure_after_rebuild_preserves_local_database(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local-safe")
+        before = db.read_bytes()
+
+        result = NonCompetitiveFailureService(
+            self.fixture.config(), "remote: authentication required"
+        ).push_local_database()
+
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(result.stage, "push")
+        self.assertEqual(db.read_bytes(), before)
+
     def test_unchanged_database_creates_no_commit(self):
         service = DataSyncService(self.fixture.config())
         before = run_git(self.fixture.repo, "rev-parse", "refs/remotes/origin/main").stdout
@@ -493,7 +507,7 @@ class TestPullRemoteDatabase(unittest.TestCase):
         self.assertEqual(result.status, SyncStatus.FAILED)
         self.assertEqual(read_cookie(db), '"local-safe"')
 
-    def test_push_failure_preserves_local_database(self):
+    def test_fetch_failure_preserves_local_database(self):
         db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
         db.unlink()
         write_db(db, "local-safe")
