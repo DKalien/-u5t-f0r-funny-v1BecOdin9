@@ -30,6 +30,22 @@ class TestStartupRuntime(unittest.TestCase):
         self.assertEqual(run_startup_sync(service, self.app), expected)
         self.assertEqual(service.calls, ["pull"])
 
+    def test_startup_sync_sanitizes_worker_exception_detail(self):
+        class FailingService:
+            def pull_remote_database(self):
+                raise RuntimeError(
+                    "普通上下文 ssh://user:password@host token=abc "
+                    "Bearer secret-token"
+                )
+
+        result = run_startup_sync(FailingService(), self.app)
+
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("普通上下文", result.detail)
+        self.assertNotIn("password", result.detail)
+        self.assertNotIn("abc", result.detail)
+        self.assertNotIn("secret-token", result.detail)
+
     @patch("main.load_config", return_value={"cookie": "x"})
     @patch("main.run_startup_sync")
     def test_initialize_window_syncs_before_loading_config(self, run_sync, load_config):
