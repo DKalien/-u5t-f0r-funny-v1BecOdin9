@@ -6,7 +6,8 @@
 ## 变更
 - 新增 `sync_runtime.py`：`SyncWorker` 捕获线程异常并发出 `SyncResult`，`run_startup_sync()` 使用 Qt event loop 等待工作线程完成。
 - `main.py` 新增 `build_sync_service()`、`initialize_window()`，并保证 `sync -> load -> show` 顺序。
-- 新增 `tests/test_sync_runtime.py`，覆盖线程同步结果和启动调用顺序。
+- 新增 `tests/test_sync_runtime.py`，覆盖线程同步结果、异常诊断脱敏和启动调用顺序。
+- `data_sync.py` 提升公开 `sanitize_detail()`，并保留 `_sanitize_detail` 兼容别名；worker 异常详情统一脱敏并限制 2000 字符。
 
 ## TDD
 - RED：先运行 runtime 测试，按预期因 `sync_runtime` 不存在失败（`ModuleNotFoundError`）。
@@ -19,7 +20,7 @@
 ## 测试
 `QT_QPA_PLATFORM=offscreen python -m unittest tests.test_sync_runtime tests.test_data_sync tests.test_config -v`
 
-结果：32 tests passed。
+结果：33 tests passed。
 
 ## 自审 concerns
 - `run_startup_sync()` 在 Qt 主线程通过局部 `QEventLoop` 等待，Git 网络操作只发生在 `SyncWorker.run()`；UI 事件仍可处理。
