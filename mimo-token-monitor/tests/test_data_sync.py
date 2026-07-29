@@ -295,3 +295,27 @@ class TestPullRemoteDatabase(unittest.TestCase):
         self.assertEqual(result.status, SyncStatus.FAILED)
         self.assertEqual(read_cookie(db), '"local"')
         self.assertEqual(list(db.parent.glob(".mimo-settings-*.tmp")), [])
+
+    def test_fdopen_failure_closes_untransferred_descriptor_and_preserves_local(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local")
+        real_close = os.close
+        with patch("data_sync.os.fdopen", side_effect=OSError("fdopen failed")) as fdopen:
+            with patch("data_sync.os.close", side_effect=real_close) as close:
+                result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(read_cookie(db), '"local"')
+        fdopen.assert_called_once()
+        close.assert_called_once_with(fdopen.call_args.args[0])
+
+    def test_cleanup_failure_does_not_mask_failed_result(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local")
+        with patch.object(DataSyncService, "_validate_sqlite", return_value=False):
+            with patch.object(Path, "unlink", side_effect=OSError("cleanup failed")):
+                result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(result.stage, "validate_db")
+        self.assertEqual(read_cookie(db), '"local"')
