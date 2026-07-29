@@ -461,6 +461,48 @@ class TestOperationDeadline(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertAlmostEqual(calls[1], 25.0)
 
+    def test_pull_quick_check_budget_expiry_preserves_local_database(self):
+        tmp = tempfile.TemporaryDirectory(prefix="mimo_deadline_pull_")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        data_dir = root / "mimo-token-monitor"
+        data_dir.mkdir()
+        db = data_dir / "settings.db"
+        db.write_bytes(b"local")
+        config = SyncConfig(root, data_dir, db, timeout_seconds=30)
+        now = [0.0]
+        def clock(): return now[0]
+        def validate(_path):
+            now[0] = 31.0
+            return True
+        service = DataSyncService(config)
+        with patch("data_sync.time.monotonic", side_effect=clock),              patch.object(service, "validate_repository", return_value=None),              patch.object(service, "_git", return_value=b"remote"),              patch.object(service, "_validate_sqlite", side_effect=validate),              patch("data_sync.os.replace") as replace:
+            result = service.pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(db.read_bytes(), b"local")
+        replace.assert_not_called()
+
+    def test_push_quick_check_budget_expiry_skips_git(self):
+        tmp = tempfile.TemporaryDirectory(prefix="mimo_deadline_push_")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        data_dir = root / "mimo-token-monitor"
+        data_dir.mkdir()
+        db = data_dir / "settings.db"
+        db.write_bytes(b"local")
+        config = SyncConfig(root, data_dir, db, timeout_seconds=30)
+        now = [0.0]
+        def clock(): return now[0]
+        def validate(_path):
+            now[0] = 31.0
+            return True
+        runner = Mock()
+        service = DataSyncService(config, runner=runner)
+        with patch("data_sync.time.monotonic", side_effect=clock),              patch.object(service, "validate_repository", return_value=None),              patch.object(service, "_validate_sqlite", side_effect=validate):
+            result = service.push_local_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        runner.assert_not_called()
+
     def test_push_retry_does_not_refresh_budget(self):
         config = SyncConfig(Path("/repo"), Path("/repo/mimo-token-monitor"), Path("/repo/mimo-token-monitor/settings.db"), timeout_seconds=30, push_retries=3)
         service = DataSyncService(config)
@@ -470,7 +512,7 @@ class TestOperationDeadline(unittest.TestCase):
             with patch("data_sync.time.monotonic", side_effect=[0.0, 0.0, 31.0]):
                 result = service.push_local_database()
         self.assertEqual(result.status, SyncStatus.FAILED)
-        self.assertEqual(git.call_count, 1)
+        self.assertEqual(git.call_count, 0)
 
 
 class TestPullRemoteDatabase(unittest.TestCase):

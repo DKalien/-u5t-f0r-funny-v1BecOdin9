@@ -170,7 +170,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 | `MIMO_TOKEN_MONITOR_DATA_DIR` | `D:\python\data\mimo-token-monitor` | 数据目录；其父目录被视为仓库根目录 |
 | `MIMO_TOKEN_MONITOR_GIT_REMOTE` | `origin` | Git 远端名 |
 | `MIMO_TOKEN_MONITOR_GIT_BRANCH` | `main` | Git 分支名 |
-| `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每条 Git 命令超时秒数 |
+| `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每次启动/退出同步的总 Git 操作预算秒数 |
 | `MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES` | `3` | 最多 push 尝试次数；默认 `3` 表示首次尝试加最多 2 次重试 |
 
 ## 隐私
@@ -181,4 +181,4 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 
 ### Git 同步超时
-启动拉取和真正退出推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时。
+启动拉取和真正退出推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时；本地 SQLite、文件写入等阶段在阶段完成后检查预算，不承诺抢占正在执行的系统调用。
