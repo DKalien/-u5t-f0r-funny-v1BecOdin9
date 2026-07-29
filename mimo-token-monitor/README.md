@@ -19,6 +19,7 @@
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **第三方用量 API 显示**：标题栏下拉菜单可切换 MiMo Token / API Usage 模式，支持配置第三方 Usage API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
+- **设置数据库 Git 同步**：程序启动时、窗口显示前拉取远端 `mimo-token-monitor/settings.db`，真正退出时仅提交并推送该文件；关闭到托盘不推送
 
 ## 使用方式
 
@@ -111,7 +112,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - Python + PyQt6
 - 直接调用小米平台 REST API（`/api/v1/tokenPlan/usage`）
 - Cookie 认证，支持 CDP（Chrome DevTools Protocol）自动导入
-- 数据纯本地存储
+- 配置默认存储于外置 SQLite；Git 同步按上文策略仅操作 `mimo-token-monitor/settings.db`
 
 ## Claude HUD 集成
 
@@ -148,14 +149,36 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 ## 数据存储与跨设备同步
 
-- 默认配置存储在外置 SQLite 文件：`D:\python\data\mimo-token-monitor\settings.db`（单表 `settings`，每行一个配置键）。
+- 配置默认存储在外置 SQLite 文件：`D:\python\data\mimo-token-monitor\settings.db`（单表 `settings`，每行一个配置键）。
 - 可通过环境变量 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖数据目录，适用于跨设备盘符/路径不一致的场景。
 - 首次运行时，如果外置库无配置且旧文件 `~/.mimo-widget/config.json` 存在，会自动读取并迁移；旧文件保留，但不再作为主配置来源。
 - **敏感数据提示**：数据库中会包含 Cookie、API Key 等明文凭据，请勿将数据目录提交到公开仓库。
-- **跨设备同步提示**：若使用同步盘/网盘同步数据目录，请避免两台设备同时运行本程序写入同一个 `settings.db`；切换设备前建议先退出应用。
+
+### Git 同步策略
+
+- `D:\python\data` 必须是 Git 仓库，并配置可访问的默认远端分支 `origin/main`；可通过 `MIMO_TOKEN_MONITOR_GIT_REMOTE` 和 `MIMO_TOKEN_MONITOR_GIT_BRANCH` 覆盖远端名与分支名，认证沿用本机 Git/SSH 配置。
+- 启动时远端 `settings.db` 优先。远端文件通过 SQLite `PRAGMA quick_check` 后才会原子覆盖本地文件；同步失败时继续使用本地数据库。
+- 只有托盘或悬浮窗菜单中的“退出”会推送；最小化到托盘不会推送。
+- 退出时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
+- 推送失败时本地数据库保持不变，程序仍正常退出。
+- 程序不会对共享仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
+
+可用环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `MIMO_TOKEN_MONITOR_DATA_DIR` | `D:\python\data\mimo-token-monitor` | 数据目录；其父目录被视为仓库根目录 |
+| `MIMO_TOKEN_MONITOR_GIT_REMOTE` | `origin` | Git 远端名 |
+| `MIMO_TOKEN_MONITOR_GIT_BRANCH` | `main` | Git 分支名 |
+| `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每次启动/退出同步的总 Git 操作预算秒数 |
+| `MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES` | `3` | 最多 push 尝试次数；默认 `3` 表示首次尝试加最多 2 次重试 |
 
 ## 隐私
 
-- 配置与快照本地存储；未启用 API Usage 时不请求第三方服务
+- 配置默认存于本地 SQLite，并按上文 Git 策略同步；快照文件本地存储；未启用 API Usage 时不请求第三方服务
 - Cookie、API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 API Usage 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
+
+
+### Git 同步超时
+启动拉取和真正退出推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时；本地 SQLite、文件写入等阶段在阶段完成后检查预算，不承诺抢占正在执行的系统调用。

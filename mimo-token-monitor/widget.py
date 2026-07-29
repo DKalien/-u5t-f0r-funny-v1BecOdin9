@@ -245,9 +245,11 @@ class SettingsDialog(QDialog):
 
 # ── Main widget ─────────────────────────────────────────────────
 class TokenWidget(QWidget):
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, exit_callback=None, startup_sync_result=None):
         super().__init__()
         self.cfg = cfg
+        self._exit_callback = exit_callback
+        self._exit_requested = False
         self._drag_pos = QPoint()
         self._last_error = ""
         self._last_update = "等待更新..."
@@ -299,6 +301,9 @@ class TokenWidget(QWidget):
 
         # 系统托盘
         self._setup_tray()
+
+        if startup_sync_result is not None and not startup_sync_result.ok:
+            QTimer.singleShot(0, lambda: self.show_sync_result(startup_sync_result))
 
         QTimer.singleShot(500, self._do_fetch)
 
@@ -583,6 +588,8 @@ class TokenWidget(QWidget):
 
     def _set_always_on_top(self, enabled: bool):
         """Toggle WindowStaysOnTopHint while preserving window position."""
+        if self._exit_requested:
+            return
         self._always_on_top = enabled
         self.cfg["always_on_top"] = enabled
         save_config(self.cfg)
@@ -685,6 +692,8 @@ class TokenWidget(QWidget):
 
     def _set_display_mode(self, mode: str):
         """Switch display mode and refresh."""
+        if self._exit_requested:
+            return
         self.cfg["display_mode"] = mode
         save_config(self.cfg)
         self._do_fetch()
@@ -727,6 +736,8 @@ class TokenWidget(QWidget):
 
     def _do_fetch_third_party(self):
         """Dispatch third-party usage fetch."""
+        if self._exit_requested:
+            return
         if hasattr(self, "_tp_worker") and self._tp_worker.isRunning():
             return
         api_key = self.cfg.get("third_party_api_key", "")
@@ -743,6 +754,8 @@ class TokenWidget(QWidget):
 
     def _on_third_party_fetch_done(self, result: dict):
         """Handle third-party usage fetch result."""
+        if self._exit_requested:
+            return
         if result.get("ok"):
             self._tp_data = result.get("data")
             self._last_error = ""
@@ -881,6 +894,8 @@ class TokenWidget(QWidget):
                 self.update()
 
     def mouseReleaseEvent(self, e):
+        if self._exit_requested:
+            return
         if e.button() == Qt.MouseButton.LeftButton:
             self.cfg["position"] = [self.x(), self.y()]
             save_config(self.cfg)
@@ -910,8 +925,28 @@ class TokenWidget(QWidget):
         self.activateWindow()
         self.raise_()
 
+    def show_sync_result(self, result):
+        """Show a non-blocking tray notification for a sync result."""
+        self._tray_icon.showMessage(
+            "MiMo 设置同步",
+            result.message,
+            QSystemTrayIcon.MessageIcon.Warning,
+            5000,
+        )
+
     def _quit_app(self):
-        """真正退出应用程序。"""
+        """真正退出应用程序；同步期间忽略重复请求。"""
+        if self._exit_requested:
+            return
+        self._exit_requested = True
+        self.setEnabled(False)
+        self._timer.stop()
+        if self._exit_callback is not None:
+            self._exit_callback()
+        else:
+            self.finish_quit()
+
+    def finish_quit(self):
         self._tray_icon.hide()
         QApplication.quit()
 
@@ -945,6 +980,8 @@ class TokenWidget(QWidget):
     # ── Import ──────────────────────────────────────────────────
     def _import_cookie_quick(self):
         """从浏览器快速导入 Cookie，自动保存并刷新数据。"""
+        if self._exit_requested:
+            return
         cookie_str, error = cookie_reader.import_cookie_from_browser()
         if not cookie_str:
             QMessageBox.warning(self, "导入失败", error or "无法从浏览器读取 Cookie")
@@ -976,6 +1013,8 @@ class TokenWidget(QWidget):
 
     # ── Fetch ───────────────────────────────────────────────────
     def _do_fetch(self):
+        if self._exit_requested:
+            return
         display_mode = self.cfg.get("display_mode", "mimo")
         if display_mode == "third_party":
             self._do_fetch_third_party()
@@ -995,6 +1034,8 @@ class TokenWidget(QWidget):
         self._worker.start()
 
     def _on_fetch_done(self, bal_result: dict, usage_result: dict):
+        if self._exit_requested:
+            return
         if not bal_result["ok"]:
             self._last_error = bal_result.get("error", "余额查询失败")
         elif not usage_result["ok"]:
@@ -1151,8 +1192,12 @@ class TokenWidget(QWidget):
 
     # ── Actions ─────────────────────────────────────────────────
     def _open_settings(self):
+        if self._exit_requested:
+            return
         dlg = SettingsDialog(self.cfg, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            if self._exit_requested:
+                return
             self.cfg = dlg.get_config()
             save_config(self.cfg)
             self.setWindowOpacity(self.cfg.get("opacity", 0.85))

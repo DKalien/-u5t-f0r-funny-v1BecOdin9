@@ -6,6 +6,8 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication, QDialog
 
 from config import load_config, save_config
+from data_sync import DataSyncService, SyncConfig, SyncResult, SyncStatus
+from sync_runtime import ExitSyncController, run_startup_sync
 from widget import SettingsDialog, TokenWidget
 
 
@@ -70,6 +72,43 @@ def activation_requested(event) -> bool:
     return kernel32.WaitForSingleObject(event, 0) == WAIT_OBJECT_0
 
 
+def build_sync_service() -> tuple[DataSyncService | None, SyncResult | None]:
+    try:
+        return DataSyncService(SyncConfig.from_environment()), None
+    except ValueError as exc:
+        return None, SyncResult(SyncStatus.SKIPPED, "config", str(exc))
+
+
+def initialize_window(app, service):
+    startup_result = (
+        run_startup_sync(service, app)
+        if service is not None
+        else SyncResult(SyncStatus.SKIPPED, "config", "同步配置无效")
+    )
+    cfg = load_config()
+
+    if not cfg.get("cookie"):
+        dlg = SettingsDialog(cfg)
+        dlg.setWindowTitle("MiMo Token - 首次配置")
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            cfg = dlg.get_config()
+            save_config(cfg)
+        else:
+            return None, startup_result
+
+    widget = TokenWidget(cfg, startup_sync_result=startup_result)
+    controller = ExitSyncController(
+        service,
+        widget.finish_quit,
+        widget.show_sync_result,
+        parent=widget,
+    )
+    widget._exit_callback = controller.request_exit
+    widget._exit_sync_controller = controller
+    widget.show()
+    return widget, startup_result
+
+
 def main() -> int:
     mutex = check_single_instance()
     if mutex is None:
@@ -83,20 +122,12 @@ def main() -> int:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
 
-        cfg = load_config()
-
-        # First run: open settings if no cookie.
-        if not cfg.get("cookie"):
-            dlg = SettingsDialog(cfg)
-            dlg.setWindowTitle("MiMo Token - 首次配置")
-            if dlg.exec() == QDialog.DialogCode.Accepted:
-                cfg = dlg.get_config()
-                save_config(cfg)
-            else:
-                return 0
-
-        widget = TokenWidget(cfg)
-        widget.show()
+        service, config_result = build_sync_service()
+        widget, startup_result = initialize_window(app, service)
+        if config_result is not None:
+            startup_result = config_result
+        if widget is None:
+            return 0
 
         activation_timer = QTimer()
         activation_timer.setInterval(250)
