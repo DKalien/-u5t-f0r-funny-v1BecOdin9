@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from PyQt6.QtCore import QEventLoop, QThread, pyqtSignal
 
-from data_sync import DataSyncService, SyncResult, SyncStatus
+from data_sync import DataSyncService, SyncResult, SyncStatus, sanitize_detail
 
 
 class SyncWorker(QThread):
@@ -22,7 +22,7 @@ class SyncWorker(QThread):
                 SyncStatus.FAILED,
                 "runtime",
                 "同步线程异常",
-                str(exc)[-2000:],
+                sanitize_detail(str(exc)),
             )
         self.completed.emit(result)
 

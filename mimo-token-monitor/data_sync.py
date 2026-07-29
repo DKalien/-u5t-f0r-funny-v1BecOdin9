@@ -23,7 +23,7 @@ class GitCommandError(RuntimeError):
         self.detail = _sanitize_detail(detail)
 
 
-def _sanitize_detail(detail: str) -> str:
+def sanitize_detail(detail: str) -> str:
     clean = re.sub(
         r"([A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:]+):([^\s/@]+)@",
         r"\1***:***@",
@@ -57,6 +57,9 @@ def _sanitize_detail(detail: str) -> str:
         flags=re.I,
     )
     return clean[-2000:]
+
+
+_sanitize_detail = sanitize_detail
 
 
 class SyncStatus(str, Enum):
