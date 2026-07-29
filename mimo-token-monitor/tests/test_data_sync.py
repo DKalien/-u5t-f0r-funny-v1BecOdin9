@@ -502,4 +502,3 @@ class TestPullRemoteDatabase(unittest.TestCase):
         result = DataSyncService(self.fixture.config()).push_local_database()
         self.assertEqual(result.status, SyncStatus.FAILED)
         self.assertEqual(read_cookie(db), '"local-safe"')
-
