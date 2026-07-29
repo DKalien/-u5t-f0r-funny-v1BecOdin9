@@ -21,7 +21,19 @@ class GitCommandError(RuntimeError):
 
 def _sanitize_detail(detail: str) -> str:
     clean = re.sub(r"https?://[^\s/@:]+:[^\s/@]+@", "https://***:***@", detail)
-    clean = re.sub(r"([?&](?:token|access_token)=)[^&\s]+", r"\1***", clean, flags=re.I)
+    clean = re.sub(r"https?://[^\s/@:]+@", "https://***@", clean)
+    clean = re.sub(
+        r"([?#&](?:token|access_token|password|passwd|api_key|apikey|secret|credential|auth)=)[^&#\s]+",
+        r"\1***",
+        clean,
+        flags=re.I,
+    )
+    clean = re.sub(
+        r"(Authorization:\s*Bearer\s+|(?<![\w])Bearer\s+)[^\s,;]+",
+        r"\1***",
+        clean,
+        flags=re.I,
+    )
     return clean[-2000:]
 
 
@@ -143,6 +155,8 @@ class DataSyncService:
         db_path = cfg.db_path.resolve()
         if db_path.parent != data_dir:
             return SyncResult(SyncStatus.SKIPPED, "validate", "数据库不在指定数据目录")
+        if db_path != data_dir / "settings.db":
+            return SyncResult(SyncStatus.SKIPPED, "validate", "数据库路径不是允许的 settings.db")
         if data_dir.parent != repo_root:
             return SyncResult(SyncStatus.SKIPPED, "validate", "数据目录与仓库根目录不匹配")
         return None

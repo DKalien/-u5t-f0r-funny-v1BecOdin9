@@ -80,6 +80,16 @@ class TestSyncConfig(unittest.TestCase):
         result = DataSyncService(config).validate_paths()
         self.assertEqual(result.status, SyncStatus.SKIPPED)
 
+    def test_other_database_file_in_data_directory_is_rejected(self):
+        config = SyncConfig(
+            repo_root=self.repo.resolve(),
+            data_dir=self.data_dir.resolve(),
+            db_path=(self.data_dir / "other.db").resolve(),
+        )
+        result = DataSyncService(config).validate_paths()
+        self.assertEqual(result.status, SyncStatus.SKIPPED)
+        self.assertEqual(result.stage, "validate")
+
 
 class TestGitBoundary(unittest.TestCase):
     def setUp(self):
@@ -117,3 +127,28 @@ class TestGitBoundary(unittest.TestCase):
         self.assertNotIn("alice", clean)
         self.assertNotIn("secret", clean)
         self.assertNotIn("abc", clean)
+
+    def test_sensitive_diagnostic_forms_are_redacted(self):
+        detail = (
+            "https://urluser@example.test/a "
+            "https://urlname:urlpass@example.test/b "
+            "?token=tokenvalue&access_token=accessvalue#password=passwordvalue "
+            "?passwd=passwdvalue&api_key=keyvalue&apikey=apikeyvalue "
+            "#secret=secretvalue&credential=credentialvalue&auth=authvalue "
+            "Authorization: Bearer headerbearer "
+            "Bearer standalonebearer ordinary-diagnostic"
+        )
+        clean = _sanitize_detail(detail)
+        for sensitive in (
+            "urluser", "urlname", "urlpass", "tokenvalue", "accessvalue",
+            "passwordvalue", "passwdvalue", "keyvalue", "apikeyvalue",
+            "secretvalue", "credentialvalue", "authvalue", "headerbearer",
+            "standalonebearer",
+        ):
+            self.assertNotIn(sensitive, clean)
+        self.assertIn("ordinary-diagnostic", clean)
+        self.assertIn("https://***:***@example.test/b", clean)
+
+    def test_non_sensitive_diagnostic_is_preserved(self):
+        detail = "fatal: repository unavailable; hint: check ordinary value"
+        self.assertEqual(_sanitize_detail(detail), detail)
