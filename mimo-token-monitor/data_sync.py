@@ -20,13 +20,26 @@ class GitCommandError(RuntimeError):
 
 
 def _sanitize_detail(detail: str) -> str:
-    clean = re.sub(r"https?://[^\s/@:]+:[^\s/@]+@", "https://***:***@", detail)
-    clean = re.sub(r"https?://[^\s/@:]+@", "https://***@", clean)
     clean = re.sub(
-        r"([?#&](?:token|access_token|password|passwd|api_key|apikey|secret|credential|auth)=)[^&#\s]+",
+        r"([A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:]+):([^\s/@]+)@",
+        r"\1***:***@",
+        detail,
+    )
+    clean = re.sub(
+        r"([A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:]+)@",
+        r"\1***@",
+        clean,
+    )
+    sensitive_keys = "token|access_token|password|passwd|api_key|apikey|secret|credential|auth"
+    clean = re.sub(
+        rf"(?i)(?<![\w])((?:remote\s+)?(?:{sensitive_keys}))(\s*[=:]\s*|\s+)[^\s,;&?#]+",
+        r"\1\2***",
+        clean,
+    )
+    clean = re.sub(
+        rf"(?i)([?#&](?:{sensitive_keys})=)[^&#\s]+",
         r"\1***",
         clean,
-        flags=re.I,
     )
     clean = re.sub(
         r"(Authorization:\s*Bearer\s+|(?<![\w])Bearer\s+)[^\s,;]+",
@@ -141,7 +154,7 @@ class DataSyncService:
             ).resolve()
         except GitCommandError as exc:
             return SyncResult(SyncStatus.SKIPPED, "validate", str(exc), exc.detail)
-        if actual != self.config.repo_root:
+        if actual != self.config.repo_root.resolve():
             return SyncResult(SyncStatus.SKIPPED, "validate", "Git 仓库根目录不匹配")
         return None
 
