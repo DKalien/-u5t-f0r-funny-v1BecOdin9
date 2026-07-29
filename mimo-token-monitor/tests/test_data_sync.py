@@ -47,6 +47,28 @@ class TestSyncConfig(unittest.TestCase):
         self.assertEqual(result.status, SyncStatus.SKIPPED)
         self.assertEqual(result.stage, "validate")
 
+    def test_symlink_database_target_outside_data_directory_is_rejected(self):
+        outside = Path(self.tmp.name) / "financial-data-backup"
+        outside.mkdir()
+        target = outside / "settings.db"
+        target.touch()
+        link = self.data_dir / "settings.db"
+        try:
+            link.symlink_to(target)
+        except OSError as exc:
+            self.skipTest(f"当前平台无法创建 symlink: {exc}")
+
+        config = SyncConfig(
+            repo_root=self.repo,
+            data_dir=self.data_dir,
+            db_path=link,
+            git_path="mimo-token-monitor/settings.db",
+        )
+        result = DataSyncService(config).validate_paths()
+        self.assertIsNotNone(result)
+        self.assertEqual(result.status, SyncStatus.SKIPPED)
+        self.assertEqual(result.stage, "validate")
+
     def test_wrong_git_path_is_rejected(self):
         config = SyncConfig(
             repo_root=self.repo.resolve(),
