@@ -32,7 +32,12 @@ def _sanitize_detail(detail: str) -> str:
     )
     sensitive_keys = "token|access_token|password|passwd|api_key|apikey|secret|credential|auth"
     clean = re.sub(
-        rf"(?i)(?<![\w])((?:remote\s+)?(?:{sensitive_keys}))(\s*[=:]\s*|\s+)[^\s,;&?#]+",
+        r"(?i)(?<![\w])(remote\s+token)(\s+)[^\s,;&?#]+",
+        r"\1\2***",
+        clean,
+    )
+    clean = re.sub(
+        rf"(?i)(?<![\w])({sensitive_keys})(\s*[=:]\s*)[^\s,;&?#]+",
         r"\1\2***",
         clean,
     )
@@ -124,7 +129,7 @@ class DataSyncService:
         self._runner = runner
 
     def _git(self, *args: str, input_bytes: bytes | None = None, env: dict | None = None) -> bytes:
-        command = ["git", "-C", str(self.config.repo_root), *args]
+        command = ["git", "-C", str(self.config.repo_root.resolve()), *args]
         try:
             completed = self._runner(
                 command,
