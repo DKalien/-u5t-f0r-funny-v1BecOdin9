@@ -5,7 +5,7 @@
 
 ## Commit
 - 代码与测试提交：`c99731d test(data-sync): 覆盖同步失败与窗口生命周期`
-- 本轮审查修复提交：`7fb0bbb test(data-sync): 强化失败阶段与窗口清理回归`
+- 本轮复审修复提交：`63d625c test(data-sync): 统一窗口 fixture 并恢复 Qt 环境`
 
 ## 测试总数
 - `QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v`
