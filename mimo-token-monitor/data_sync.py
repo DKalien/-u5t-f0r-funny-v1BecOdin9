@@ -236,11 +236,7 @@ class DataSyncService:
 
     def _is_non_fast_forward(self, exc: GitCommandError) -> bool:
         detail = exc.detail.lower()
-        return (
-            "non-fast-forward" in detail
-            or "fetch first" in detail
-            or "rejected" in detail
-        )
+        return "non-fast-forward" in detail or "fetch first" in detail
 
     def _before_push(self, attempt: int) -> None:
         pass
@@ -269,12 +265,18 @@ class DataSyncService:
                         f"{commit}:refs/heads/{self.config.branch}",
                     )
                 except GitCommandError as exc:
-                    if attempt < self.config.push_retries and self._is_non_fast_forward(exc):
-                        continue
+                    if self._is_non_fast_forward(exc):
+                        if attempt < self.config.push_retries:
+                            continue
+                        return SyncResult(
+                            SyncStatus.FAILED,
+                            "push",
+                            "远端持续更新，已达到重试上限",
+                            exc.detail,
+                        )
                     raise
                 self._git("update-ref", self.remote_ref, commit)
                 return SyncResult(SyncStatus.SUCCESS, "push", "已同步本地悬浮窗设置")
-            return SyncResult(SyncStatus.FAILED, "push", "远端持续更新，已停止重试")
         except (GitCommandError, OSError) as exc:
             detail = exc.detail if isinstance(exc, GitCommandError) else _sanitize_detail(str(exc))
             return SyncResult(SyncStatus.FAILED, "push", str(exc), detail)
