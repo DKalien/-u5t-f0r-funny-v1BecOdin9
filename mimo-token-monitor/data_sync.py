@@ -9,6 +9,7 @@ import re
 import sqlite3
 import subprocess
 import tempfile
+import time
 from typing import Callable
 
 from config import _db_path, _project_data_dir
@@ -34,7 +35,12 @@ def sanitize_detail(detail: str) -> str:
         r"\1***@",
         clean,
     )
-    sensitive_keys = "token|access_token|password|passwd|api_key|apikey|secret|credential|auth"
+    sensitive_keys = "token|access_token|password|passwd|api_key|apikey|secret|credential|auth|cookie|set-cookie|session|sessionid"
+    clean = re.sub(
+        r"(?i)(\b(?:cookie|set-cookie)\s*:\s*)[^\r\n]+",
+        r"\1***",
+        clean,
+    )
     clean = re.sub(
         r"(?i)(?<![\w])(remote\s+token)(\s+)[^\s,;&?#]+",
         r"\1\2***",
@@ -135,15 +141,20 @@ class DataSyncService:
         self.config = config
         self._runner = runner
 
-    def _git(self, *args: str, input_bytes: bytes | None = None, env: dict | None = None) -> bytes:
+    def _git(self, *args: str, input_bytes: bytes | None = None, env: dict | None = None, deadline: float | None = None) -> bytes:
         command = ["git", "-C", str(self.config.repo_root.resolve()), *args]
+        if deadline is None:
+            deadline = time.monotonic() + self.config.timeout_seconds
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise GitCommandError("Git 操作总预算已耗尽", "deadline exhausted")
         try:
             completed = self._runner(
                 command,
                 input=input_bytes,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=self.config.timeout_seconds,
+                timeout=max(0.001, remaining),
                 check=False,
                 env=env,
             )
@@ -156,16 +167,19 @@ class DataSyncService:
             raise GitCommandError("Git 命令执行失败", detail)
         return completed.stdout
 
-    def validate_repository(self) -> SyncResult | None:
+    def validate_repository(self, deadline: float | None = None) -> SyncResult | None:
         invalid = self.validate_paths()
         if invalid is not None:
             return invalid
         try:
             actual = Path(
-                self._git("rev-parse", "--show-toplevel").decode("utf-8").strip()
+                self._git("rev-parse", "--show-toplevel", deadline=deadline).decode("utf-8").strip()
             ).resolve()
         except GitCommandError as exc:
-            return SyncResult(SyncStatus.SKIPPED, "validate", str(exc), exc.detail)
+            return SyncResult(
+                SyncStatus.FAILED if "超时" in str(exc) or "预算" in str(exc) else SyncStatus.SKIPPED,
+                "validate", str(exc), exc.detail
+            )
         if actual != self.config.repo_root.resolve():
             return SyncResult(SyncStatus.SKIPPED, "validate", "Git 仓库根目录不匹配")
         return None
@@ -219,22 +233,22 @@ class DataSyncService:
         env["GIT_INDEX_FILE"] = str(index_path)
         return env
 
-    def _build_commit(self, parent: str, index_path: Path) -> str | None:
+    def _build_commit(self, parent: str, index_path: Path, deadline: float) -> str | None:
         env = self._index_env(index_path)
-        self._git("read-tree", parent, env=env)
-        blob = self._git("hash-object", "-w", str(self.config.db_path)).decode().strip()
+        self._git("read-tree", parent, env=env, deadline=deadline)
+        blob = self._git("hash-object", "-w", str(self.config.db_path), deadline=deadline).decode().strip()
         self._git(
             "update-index", "--add", "--cacheinfo", "100644", blob,
-            self.config.git_path, env=env,
+            self.config.git_path, env=env, deadline=deadline,
         )
-        tree = self._git("write-tree", env=env).decode().strip()
-        parent_tree = self._git("rev-parse", f"{parent}^{{tree}}").decode().strip()
+        tree = self._git("write-tree", env=env, deadline=deadline).decode().strip()
+        parent_tree = self._git("rev-parse", f"{parent}^{{tree}}", deadline=deadline).decode().strip()
         if tree == parent_tree:
             return None
         return self._git(
             "commit-tree", tree, "-p", parent,
             input_bytes=(_COMMIT_MESSAGE + "\n").encode("utf-8"),
-            env=env,
+            env=env, deadline=deadline,
         ).decode().strip()
 
     def _is_non_fast_forward(self, exc: GitCommandError) -> bool:
@@ -245,7 +259,8 @@ class DataSyncService:
         pass
 
     def push_local_database(self) -> SyncResult:
-        invalid = self.validate_repository()
+        deadline = time.monotonic() + self.config.timeout_seconds
+        invalid = self.validate_repository(deadline)
         if invalid is not None:
             return invalid
         if not self.config.db_path.is_file() or not self._validate_sqlite(self.config.db_path):
@@ -254,18 +269,18 @@ class DataSyncService:
             for attempt in range(1, self.config.push_retries + 1):
                 self._git(
                     "fetch", self.config.remote,
-                    f"{self.config.branch}:{self.remote_ref}",
+                    f"{self.config.branch}:{self.remote_ref}", deadline=deadline
                 )
-                parent = self._git("rev-parse", self.remote_ref).decode().strip()
+                parent = self._git("rev-parse", self.remote_ref, deadline=deadline).decode().strip()
                 with self._temporary_index() as index_path:
-                    commit = self._build_commit(parent, index_path)
+                    commit = self._build_commit(parent, index_path, deadline)
                 if commit is None:
                     return SyncResult(SyncStatus.NO_CHANGE, "push", "设置没有变化，无需推送")
                 self._before_push(attempt)
                 try:
                     self._git(
                         "push", self.config.remote,
-                        f"{commit}:refs/heads/{self.config.branch}",
+                        f"{commit}:refs/heads/{self.config.branch}", deadline=deadline
                     )
                 except GitCommandError as exc:
                     if self._is_non_fast_forward(exc):
@@ -278,21 +293,22 @@ class DataSyncService:
                             exc.detail,
                         )
                     raise
-                self._git("update-ref", self.remote_ref, commit)
+                self._git("update-ref", self.remote_ref, commit, deadline=deadline)
                 return SyncResult(SyncStatus.SUCCESS, "push", "已同步本地悬浮窗设置")
         except (GitCommandError, OSError) as exc:
             detail = exc.detail if isinstance(exc, GitCommandError) else _sanitize_detail(str(exc))
             return SyncResult(SyncStatus.FAILED, "push", str(exc), detail)
 
     def pull_remote_database(self) -> SyncResult:
-        invalid = self.validate_repository()
+        deadline = time.monotonic() + self.config.timeout_seconds
+        invalid = self.validate_repository(deadline)
         if invalid is not None:
             return invalid
         temp_path: Path | None = None
         try:
             self._git("fetch", self.config.remote,
-                      f"{self.config.branch}:{self.remote_ref}")
-            blob = self._git("show", f"{self.remote_ref}:{self.config.git_path}")
+                      f"{self.config.branch}:{self.remote_ref}", deadline=deadline)
+            blob = self._git("show", f"{self.remote_ref}:{self.config.git_path}", deadline=deadline)
             self.config.data_dir.mkdir(parents=True, exist_ok=True)
             fd, name = tempfile.mkstemp(
                 prefix=".mimo-settings-", suffix=".tmp", dir=self.config.data_dir

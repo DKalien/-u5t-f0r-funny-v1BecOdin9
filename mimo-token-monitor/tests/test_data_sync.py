@@ -171,6 +171,12 @@ class TestGitBoundary(unittest.TestCase):
         self.assertIn("ftp://***:***@example.test/file", clean)
         self.assertIn("ordinary-diagnostic", clean)
 
+    def test_cookie_diagnostics_are_redacted_without_overmatching(self):
+        clean = _sanitize_detail("Cookie: session=abc; token=def\nSet-Cookie: sid=secret\nhttps://x.test/?cookie=abc&sessionid=def")
+        for value in ("abc", "def", "secret"):
+            self.assertNotIn(value, clean)
+        self.assertIn("cookie policy", _sanitize_detail("cookie policy"))
+
     def test_common_diagnostic_phrases_are_preserved(self):
         detail = "token usage; password expired; auth failed"
         self.assertEqual(_sanitize_detail(detail), detail)
@@ -440,6 +446,33 @@ class TestPushLocalDatabase(unittest.TestCase):
         self.assertEqual(after, before)
 
 
+class TestOperationDeadline(unittest.TestCase):
+    def test_pull_shares_budget_and_stops_before_next_command(self):
+        config = SyncConfig(Path("/repo"), Path("/repo/mimo-token-monitor"), Path("/repo/mimo-token-monitor/settings.db"), timeout_seconds=30)
+        clock = iter([100.0, 100.0, 105.0, 131.0])
+        calls = []
+        def monotonic(): return next(clock)
+        def runner(command, **kwargs):
+            calls.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(command, 0, b"/repo\n", b"")
+        with patch("data_sync.time.monotonic", side_effect=monotonic):
+            result = DataSyncService(config, runner=runner).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(len(calls), 2)
+        self.assertAlmostEqual(calls[1], 25.0)
+
+    def test_push_retry_does_not_refresh_budget(self):
+        config = SyncConfig(Path("/repo"), Path("/repo/mimo-token-monitor"), Path("/repo/mimo-token-monitor/settings.db"), timeout_seconds=30, push_retries=3)
+        service = DataSyncService(config)
+        with patch.object(service, "validate_repository", return_value=None), patch.object(service, "_validate_sqlite", return_value=True), patch.object(service, "_git", side_effect=GitCommandError("x", "non-fast-forward")) as git:
+            service.config.db_path.parent.mkdir(parents=True, exist_ok=True)
+            service.config.db_path.write_bytes(b"db")
+            with patch("data_sync.time.monotonic", side_effect=[0.0, 0.0, 31.0]):
+                result = service.push_local_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(git.call_count, 1)
+
+
 class TestPullRemoteDatabase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="mimo_pull_")
@@ -513,6 +546,6 @@ class TestPullRemoteDatabase(unittest.TestCase):
         write_db(db, "local-safe")
         run_git(self.fixture.repo, "remote", "set-url", "origin",
                 str(Path(self.tmp.name) / "missing.git"))
-        result = DataSyncService(self.fixture.config()).push_local_database()
+        result = DataSyncService(self.fixture.config()).pull_remote_database()
         self.assertEqual(result.status, SyncStatus.FAILED)
         self.assertEqual(read_cookie(db), '"local-safe"')
