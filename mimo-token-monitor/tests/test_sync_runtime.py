@@ -4,10 +4,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import unittest
 from unittest.mock import Mock, patch
 from PyQt6.QtCore import QEventLoop, QTimer
+from PyQt6.QtGui import QCloseEvent
 from PyQt6.QtWidgets import QApplication
 
 from data_sync import SyncResult, SyncStatus
 from sync_runtime import ExitSyncController, run_startup_sync
+from widget import TokenWidget
 
 
 class FakeService:
@@ -127,5 +129,72 @@ class TestExitRuntime(unittest.TestCase):
         widget._tray_icon.showMessage.assert_called_once()
         widget.deleteLater()
 
-if __name__ == "__main__":
-    unittest.main()
+
+
+class TestLifecycleDegradation(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    @patch("main.load_config", return_value={"cookie": "configured"})
+    @patch("main.run_startup_sync", return_value=SyncResult(
+        SyncStatus.FAILED, "pull", "网络不可用"
+    ))
+    def test_failed_startup_sync_still_creates_widget(self, _sync, _load):
+        from main import initialize_window
+        with patch("main.TokenWidget") as widget_type:
+            widget, result = initialize_window(self.app, Mock())
+        self.assertIs(widget, widget_type.return_value)
+        self.assertEqual(result.status, SyncStatus.FAILED)
+
+    def test_close_event_hides_without_requesting_exit(self):
+        callback = Mock()
+        cfg = {"cookie": "x", "position": [100, 100], "refresh_interval": 300,
+               "opacity": 0.85, "always_on_top": True}
+        with patch.object(TokenWidget, "_setup_tray"), patch("widget.save_config"):
+            widget = TokenWidget(cfg, exit_callback=callback)
+            widget._tray_icon = Mock()
+            event = QCloseEvent()
+            widget.closeEvent(event)
+        self.assertFalse(event.isAccepted())
+        callback.assert_not_called()
+
+    def test_quit_action_requests_push_once(self):
+        callback = Mock()
+        cfg = {"cookie": "x", "position": [100, 100], "refresh_interval": 300,
+               "opacity": 0.85, "always_on_top": True}
+        with patch.object(TokenWidget, "_setup_tray"), patch("widget.save_config"):
+            widget = TokenWidget(cfg, exit_callback=callback)
+            widget._quit_app()
+            widget._quit_app()
+        callback.assert_called_once()
+
+    @patch("main.load_config", return_value={})
+    @patch("main.run_startup_sync", return_value=SyncResult(
+        SyncStatus.SKIPPED, "config", "同步配置无效"
+    ))
+    @patch("main.SettingsDialog")
+    def test_first_configuration_cancel_returns_safely(self, dialog_type, _sync, _load):
+        from PyQt6.QtWidgets import QDialog
+        from main import initialize_window
+        dialog_type.return_value.exec.return_value = QDialog.DialogCode.Rejected
+        with patch("main.TokenWidget") as widget_type:
+            widget, result = initialize_window(self.app, Mock())
+        self.assertIsNone(widget)
+        self.assertEqual(result.status, SyncStatus.SKIPPED)
+        widget_type.assert_not_called()
+
+    @patch("main.run_startup_sync")
+    @patch("main.build_sync_service")
+    @patch("main.activate_existing_instance")
+    @patch("main.check_single_instance", return_value=None)
+    def test_duplicate_instance_returns_before_sync(
+        self, _check, activate, build_service, run_sync
+    ):
+        from main import main
+        self.assertEqual(main(), 0)
+        activate.assert_called_once()
+        build_service.assert_not_called()
+        run_sync.assert_not_called()
+
+
