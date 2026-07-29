@@ -5,11 +5,11 @@
 
 ## Commit
 - 代码与测试提交：`c99731d test(data-sync): 覆盖同步失败与窗口生命周期`
-- 本次 EOF 格式修复提交：`4d506e1 chore(data-sync): 修复回归测试 EOF 格式`
+- 本轮审查修复提交：`7fb0bbb test(data-sync): 强化失败阶段与窗口清理回归`
 
 ## 测试总数
 - `QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v`
-- 44 tests，全部 PASS
+- 45 tests，全部 PASS
 - `python -m compileall -q .` PASS
 
 ## 覆盖内容
@@ -19,7 +19,8 @@
 - `closeEvent` 仅隐藏到托盘，不触发 push
 - 真正退出 callback 幂等，仅请求一次
 - 远端目标缺失保留本地数据库
-- push/fetch 失败保留本地数据库
+- push 阶段失败（fetch/rebuild 成功后）与 fetch 阶段失败分别保留本地数据库
+- Qt 生命周期 fixture 停止 timer、关闭/删除 widget 并处理 events
 - 默认 `unittest discover -s tests` 发现全部测试
 
 ## TDD
