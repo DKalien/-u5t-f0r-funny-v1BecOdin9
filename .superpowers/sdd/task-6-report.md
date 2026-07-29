@@ -16,6 +16,7 @@
 
 ## Commit
 `feat(data-sync): 显示窗口前后台拉取设置`（本次提交，最终 hash 以 `git log -1` 为准）。
+本次审查修复提交：`fix(data-sync): 脱敏启动线程异常诊断`。
 
 ## 测试
 `QT_QPA_PLATFORM=offscreen python -m unittest tests.test_sync_runtime tests.test_data_sync tests.test_config -v`
