@@ -175,6 +175,13 @@ class TestGitBoundary(unittest.TestCase):
         detail = "token usage; password expired; auth failed"
         self.assertEqual(_sanitize_detail(detail), detail)
 
+    def test_non_fast_forward_detection_requires_competition_signal(self):
+        service = DataSyncService(self.config)
+        self.assertFalse(service._is_non_fast_forward(GitCommandError("failed", "[rejected] main -> main (protected branch hook declined)")))
+        self.assertFalse(service._is_non_fast_forward(GitCommandError("failed", "remote rejected: permission denied")))
+        self.assertTrue(service._is_non_fast_forward(GitCommandError("failed", "[rejected] main -> main (non-fast-forward)")))
+        self.assertTrue(service._is_non_fast_forward(GitCommandError("failed", "hint: fetch first")))
+
 
 class TestRelativeRepositoryRoot(unittest.TestCase):
     def setUp(self):
@@ -295,14 +302,15 @@ class RacingSyncService(DataSyncService):
 
 
 class NonCompetitiveFailureService(DataSyncService):
-    def __init__(self, config: SyncConfig):
+    def __init__(self, config: SyncConfig, detail: str = "remote: authentication required"):
         super().__init__(config)
+        self.detail = detail
         self.push_attempts = 0
 
     def _git(self, *args: str, **kwargs):
         if args and args[0] == "push":
             self.push_attempts += 1
-            raise GitCommandError("Git 命令执行失败", "remote: authentication required")
+            raise GitCommandError("Git 命令执行失败", self.detail)
         return super()._git(*args, **kwargs)
 
 
@@ -360,6 +368,7 @@ class TestPushLocalDatabase(unittest.TestCase):
         result = RacingSyncService(config, clone).push_local_database()
 
         self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("重试上限", result.message)
         self.assertEqual(
             read_cookie_from_git(self.fixture.remote, "mimo-token-monitor/settings.db"),
             '"remote-v1"',
@@ -369,12 +378,13 @@ class TestPushLocalDatabase(unittest.TestCase):
         db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
         db.unlink()
         write_db(db, "local-exit")
-        service = NonCompetitiveFailureService(self.fixture.config())
+        for detail in ("remote: authentication required", "protected branch hook declined"):
+            service = NonCompetitiveFailureService(self.fixture.config(), detail)
 
-        result = service.push_local_database()
+            result = service.push_local_database()
 
-        self.assertEqual(result.status, SyncStatus.FAILED)
-        self.assertEqual(service.push_attempts, 1)
+            self.assertEqual(result.status, SyncStatus.FAILED)
+            self.assertEqual(service.push_attempts, 1)
 
         repo = self.fixture.repo
         db = repo / "mimo-token-monitor" / "settings.db"
