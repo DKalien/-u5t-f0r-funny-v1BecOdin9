@@ -19,6 +19,7 @@
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **第三方用量 API 显示**：标题栏下拉菜单可切换 MiMo Token / API Usage 模式，支持配置第三方 Usage API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
+- **设置数据库 Git 同步**：进程首次启动前拉取远端 `mimo-token-monitor/settings.db`，真正退出时仅提交并推送该文件；关闭到托盘不推送
 
 ## 使用方式
 
@@ -111,7 +112,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - Python + PyQt6
 - 直接调用小米平台 REST API（`/api/v1/tokenPlan/usage`）
 - Cookie 认证，支持 CDP（Chrome DevTools Protocol）自动导入
-- 数据纯本地存储
+- 配置默认存储于外置 SQLite；Git 同步按上文策略仅操作 `mimo-token-monitor/settings.db`
 
 ## Claude HUD 集成
 
@@ -148,11 +149,29 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 ## 数据存储与跨设备同步
 
-- 默认配置存储在外置 SQLite 文件：`D:\python\data\mimo-token-monitor\settings.db`（单表 `settings`，每行一个配置键）。
+- 配置默认存储在外置 SQLite 文件：`D:\python\data\mimo-token-monitor\settings.db`（单表 `settings`，每行一个配置键）。
 - 可通过环境变量 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖数据目录，适用于跨设备盘符/路径不一致的场景。
 - 首次运行时，如果外置库无配置且旧文件 `~/.mimo-widget/config.json` 存在，会自动读取并迁移；旧文件保留，但不再作为主配置来源。
 - **敏感数据提示**：数据库中会包含 Cookie、API Key 等明文凭据，请勿将数据目录提交到公开仓库。
-- **跨设备同步提示**：若使用同步盘/网盘同步数据目录，请避免两台设备同时运行本程序写入同一个 `settings.db`；切换设备前建议先退出应用。
+
+### Git 同步策略
+
+- `D:\python\data` 必须是 Git 仓库，并配置可访问的 `origin/main`；认证沿用本机 Git/SSH 配置。
+- 启动时远端 `settings.db` 优先。远端文件通过 SQLite `PRAGMA quick_check` 后才会原子覆盖本地文件；同步失败时继续使用本地数据库。
+- 只有托盘或悬浮窗菜单中的“退出”会推送；最小化到托盘不会推送。
+- 退出时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
+- 推送失败时本地数据库保持不变，程序仍正常退出。
+- 程序不会对共享仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
+
+可用环境变量：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `MIMO_TOKEN_MONITOR_DATA_DIR` | `D:\python\data\mimo-token-monitor` | 数据目录；其父目录被视为仓库根目录 |
+| `MIMO_TOKEN_MONITOR_GIT_REMOTE` | `origin` | Git 远端名 |
+| `MIMO_TOKEN_MONITOR_GIT_BRANCH` | `main` | Git 分支名 |
+| `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每条 Git 命令超时秒数 |
+| `MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES` | `3` | non-fast-forward 竞争重试次数 |
 
 ## 隐私
 
