@@ -4,7 +4,8 @@
 完成。已补充同步生命周期、失败降级和重复启动回归覆盖；未发现需要生产代码调整的真实接缝问题。
 
 ## Commit
-`94e4af6 test(data-sync): 覆盖同步失败与窗口生命周期`
+- 代码与测试提交：`c99731d test(data-sync): 覆盖同步失败与窗口生命周期`
+- 本次 EOF 格式修复提交：见最终 commit
 
 ## 测试总数
 - `QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v`
