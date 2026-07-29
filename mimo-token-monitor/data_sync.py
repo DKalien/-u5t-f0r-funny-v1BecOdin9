@@ -82,8 +82,12 @@ class DataSyncService:
         cfg = self.config
         if cfg.git_path != _ALLOWED_GIT_PATH or PurePosixPath(cfg.git_path).is_absolute():
             return SyncResult(SyncStatus.SKIPPED, "validate", "同步目标路径不受允许")
-        if cfg.db_path.parent != cfg.data_dir:
+
+        repo_root = cfg.repo_root.resolve()
+        data_dir = cfg.data_dir.resolve()
+        db_path = cfg.db_path.resolve()
+        if db_path.parent != data_dir:
             return SyncResult(SyncStatus.SKIPPED, "validate", "数据库不在指定数据目录")
-        if cfg.data_dir.parent != cfg.repo_root:
+        if data_dir.parent != repo_root:
             return SyncResult(SyncStatus.SKIPPED, "validate", "数据目录与仓库根目录不匹配")
         return None
