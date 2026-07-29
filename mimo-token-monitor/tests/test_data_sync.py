@@ -152,8 +152,8 @@ class TestGitBoundary(unittest.TestCase):
     def test_sensitive_naked_credentials_and_any_scheme_urls_are_redacted(self):
         detail = (
             "token=abc access_token: def remote token ghi "
-            "password jkl passwd=mno api_key: pqr apikey stu "
-            "secret=vwx credential: yz auth tokenvalue "
+            "password=jkl passwd=mno api_key: pqr apikey=stu "
+            "secret=vwx credential: yz auth=tokenvalue "
             "ssh://user:password@host/path "
             "ftp://ftpuser:ftppass@example.test/file "
             "http://httpuser:httppass@example.test/path ordinary-diagnostic"
@@ -170,20 +170,40 @@ class TestGitBoundary(unittest.TestCase):
         self.assertIn("ftp://***:***@example.test/file", clean)
         self.assertIn("ordinary-diagnostic", clean)
 
+    def test_common_diagnostic_phrases_are_preserved(self):
+        detail = "token usage; password expired; auth failed"
+        self.assertEqual(_sanitize_detail(detail), detail)
+
 
 class TestRelativeRepositoryRoot(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mimo_relative_git_", dir=Path.cwd())
+        self.repo = Path(self.tmp.name) / "data"
+        self.data_dir = self.repo / "mimo-token-monitor"
+        self.data_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _config_with_relative_root(self):
+        relative_root = Path(os.path.relpath(self.repo, Path.cwd()))
+        return SyncConfig(
+            repo_root=relative_root,
+            data_dir=self.data_dir,
+            db_path=self.data_dir / "settings.db",
+        )
+
     def test_relative_repo_root_matches_resolved_git_root(self):
-        with tempfile.TemporaryDirectory(prefix="mimo_relative_git_", dir=Path.cwd()) as tmp:
-            repo = Path(tmp) / "data"
-            data_dir = repo / "mimo-token-monitor"
-            data_dir.mkdir(parents=True)
-            relative_root = Path(os.path.relpath(repo, Path.cwd()))
-            config = SyncConfig(
-                repo_root=relative_root,
-                data_dir=data_dir,
-                db_path=data_dir / "settings.db",
-            )
-            runner = Mock(return_value=subprocess.CompletedProcess(
-                args=[], returncode=0, stdout=f"{repo.resolve()}\n".encode(), stderr=b""
-            ))
-            self.assertIsNone(DataSyncService(config, runner=runner).validate_repository())
+        config = self._config_with_relative_root()
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f"{self.repo.resolve()}\n".encode(), stderr=b""
+        ))
+        self.assertIsNone(DataSyncService(config, runner=runner).validate_repository())
+
+    def test_git_uses_resolved_repository_root(self):
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"ok", stderr=b""
+        ))
+        service = DataSyncService(self._config_with_relative_root(), runner=runner)
+        service._git("status")
+        self.assertEqual(runner.call_args.args[0][2], str(service.config.repo_root.resolve()))
