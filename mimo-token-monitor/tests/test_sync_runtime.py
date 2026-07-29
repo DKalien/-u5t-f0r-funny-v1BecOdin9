@@ -1,4 +1,6 @@
 import os
+
+_ORIGINAL_QT_QPA_PLATFORM = os.environ.get("QT_QPA_PLATFORM")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import unittest
@@ -11,6 +13,13 @@ from PyQt6.QtWidgets import QApplication
 from data_sync import SyncResult, SyncStatus
 from sync_runtime import ExitSyncController, run_startup_sync
 from widget import TokenWidget
+
+
+def tearDownModule():
+    if _ORIGINAL_QT_QPA_PLATFORM is None:
+        os.environ.pop("QT_QPA_PLATFORM", None)
+    else:
+        os.environ["QT_QPA_PLATFORM"] = _ORIGINAL_QT_QPA_PLATFORM
 
 
 @contextmanager
@@ -161,8 +170,7 @@ class TestLifecycleDegradation(unittest.TestCase):
         callback = Mock()
         cfg = {"cookie": "x", "position": [100, 100], "refresh_interval": 300,
                "opacity": 0.85, "always_on_top": True}
-        with patch.object(TokenWidget, "_setup_tray"), patch("widget.save_config"):
-            widget = TokenWidget(cfg, exit_callback=callback)
+        with managed_widget(cfg, exit_callback=callback) as widget:
             widget._tray_icon = Mock()
             event = QCloseEvent()
             widget.closeEvent(event)
@@ -173,8 +181,7 @@ class TestLifecycleDegradation(unittest.TestCase):
         callback = Mock()
         cfg = {"cookie": "x", "position": [100, 100], "refresh_interval": 300,
                "opacity": 0.85, "always_on_top": True}
-        with patch.object(TokenWidget, "_setup_tray"), patch("widget.save_config"):
-            widget = TokenWidget(cfg, exit_callback=callback)
+        with managed_widget(cfg, exit_callback=callback) as widget:
             widget._quit_app()
             widget._quit_app()
         callback.assert_called_once()
