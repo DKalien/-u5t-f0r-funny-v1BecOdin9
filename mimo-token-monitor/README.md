@@ -178,3 +178,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - 配置默认存于本地 SQLite，并按上文 Git 策略同步；快照文件本地存储；未启用 API Usage 时不请求第三方服务
 - Cookie、API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 API Usage 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
+
+
+### Git 同步超时
+启动拉取和真正退出推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时。

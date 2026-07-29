@@ -25,7 +25,7 @@ python -m unittest discover -s tests -v
 
 ## 架构
 
-9 个 Python 模块，单目录扁平结构：
+Python 模块采用单目录扁平结构：
 
 - **main.py** — 入口。单实例检查（Windows Mutex），创建 `QApplication`，加载配置，首次运行无 Cookie 时弹出 `SettingsDialog`，然后启动 `TokenWidget`。
 - **config.py** — 配置管理。默认存储于外置 SQLite `D:\python\data\mimo-token-monitor\settings.db`，可由 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖；首次运行会从旧的 `~/.mimo-widget/config.json` 迁移，外置库不可用时保留 JSON 回退。字段：`cookie`、`refresh_interval`（默认 300s）、`opacity`（默认 0.85）、`position`、`always_on_top`（默认 true）、`daily_baseline_date`（今日基准日期）、`daily_baseline_usage`（今日基准用量）。
@@ -54,4 +54,4 @@ python -m unittest discover -s tests -v
 - 今日用量计算：通过记录每天首次刷新时的月累计用量作为基准，后续刷新时计算差值得到今日用量。基准值持久化存储，程序重启不丢失数据。
 - 日常启动器：`launcher.py` 会被打包成轻量的 `dist/MiMo-Token-Monitor.exe`，从项目根目录或 `dist` 启动时读取项目中的 `main.py`。业务源码变更后只需重启启动器；只有修改启动器时才运行 `./build-launcher.ps1`。完整独立发行版仍使用 `MiMo-Token-Monitor.spec`，轻量构建不得覆盖该 spec。
 - **红线规则**：PyQt6 在 Windows 上使用浮点数坐标调用 `QPainter.drawLine()` 会导致崩溃（退出码 `0xC0000409`），所有 UI 坐标必须使用整数。
-- 设置 Git 同步只允许操作 `mimo-token-monitor/settings.db`；禁止用会修改共享工作树的 `git pull`、`checkout`、`reset`、`clean` 或普通 `git commit` 替代 plumbing 实现。
+- 设置 Git 同步操作的每次启动拉取或真正退出推送共享一个总 operation deadline，默认 30 秒，而不是每条 Git 命令各自 30 秒；同步只允许操作 `mimo-token-monitor/settings.db`；禁止用会修改共享工作树的 `git pull`、`checkout`、`reset`、`clean` 或普通 `git commit` 替代 plumbing 实现。

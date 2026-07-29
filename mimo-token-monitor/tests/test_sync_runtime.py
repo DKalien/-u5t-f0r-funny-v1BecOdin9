@@ -136,6 +136,21 @@ class TestExitRuntime(unittest.TestCase):
             widget._quit_app()
         callback.assert_called_once()
 
+    def test_quit_freezes_widget_and_blocks_write_entries(self):
+        callback = Mock()
+        with patch("widget.save_config") as save_config, patch.object(TokenWidget, "_do_fetch") as fetch:
+            widget = TokenWidget({"position": [100, 100]}, exit_callback=callback)
+            fetch.reset_mock()
+            widget._quit_app()
+            self.assertFalse(widget.isEnabled())
+            self.assertFalse(widget._timer.isActive())
+            widget._open_settings()
+            widget._import_cookie_quick()
+            widget._do_fetch()
+            save_config.assert_not_called()
+            widget.deleteLater()
+            QApplication.processEvents()
+
     def test_widget_close_event_only_hides_to_tray(self):
         callback = Mock()
         event = Mock()
