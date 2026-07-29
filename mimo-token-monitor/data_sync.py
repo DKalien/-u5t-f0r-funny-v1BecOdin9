@@ -212,7 +212,15 @@ class DataSyncService:
                 prefix=".mimo-settings-", suffix=".tmp", dir=self.config.data_dir
             )
             temp_path = Path(name)
-            with os.fdopen(fd, "wb") as handle:
+            try:
+                handle = os.fdopen(fd, "wb")
+            except OSError:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                raise
+            with handle:
                 handle.write(blob)
                 handle.flush()
                 os.fsync(handle.fileno())
@@ -226,4 +234,7 @@ class DataSyncService:
             return SyncResult(SyncStatus.FAILED, "pull", str(exc), detail)
         finally:
             if temp_path is not None:
-                temp_path.unlink(missing_ok=True)
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
