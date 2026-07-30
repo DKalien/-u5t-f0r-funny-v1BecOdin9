@@ -23,7 +23,8 @@ THIRD_PARTY_MODE = "third_party"
 OVERVIEW_MODE = "overview"
 
 BASE_HEIGHT = 140
-OVERVIEW_HEIGHT = 220
+# Overview keeps the same compact footprint as the other display modes.
+OVERVIEW_HEIGHT = BASE_HEIGHT
 
 # ── Colors ──────────────────────────────────────────────────────
 BG_COLOR = QColor(30, 30, 30, 220)
@@ -385,8 +386,11 @@ class TokenWidget(QWidget):
 
     @staticmethod
     def _overview_row_metrics(index: int):
-        base_y = 42 + index * 72
-        return base_y, base_y + 17, base_y + 26, 228, 14
+        """Return geometry for one compact overview row."""
+        row_x = 16
+        label_y = 48 + index * 40
+        bar_y = 56 + index * 40
+        return row_x, label_y, bar_y, 228, 14
 
     def _build_mimo_tooltip_lines(self) -> list:
         lines = []
@@ -826,21 +830,30 @@ class TokenWidget(QWidget):
                 "percent": (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None,
             },
             {
-                "name": "Usage API",
+                "name": "API",
                 "configured": has_api_key,
                 "percent": self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None,
             },
         ]
 
         for idx, row in enumerate(rows):
-            name_y, percent_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
+            cell_x, label_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
 
             p.setPen(QPen(TEXT_COLOR))
-            p.drawText(16, name_y, row["name"])
-            p.drawText(200, percent_y, self._format_overview_percent(row["percent"], row["configured"]))
+            label_rect = QRect(cell_x, label_y - 16, bar_w, 18)
+            p.drawText(
+                label_rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                row["name"],
+            )
+            p.drawText(
+                label_rect,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                self._format_overview_percent(row["percent"], row["configured"]),
+            )
 
             p.setBrush(QBrush(BAR_BG))
-            p.drawRoundedRect(16, bar_y, bar_w, bar_h, 4, 4)
+            p.drawRoundedRect(cell_x, bar_y, bar_w, bar_h, 4, 4)
 
             percent = self._normalize_overview_percent(row["percent"])
             fraction = 0.0 if percent is None else percent / 100.0
@@ -850,9 +863,9 @@ class TokenWidget(QWidget):
                 p.setBrush(QBrush(_bar_color(1 - fraction)))
                 p.save()
                 bar_path = QPainterPath()
-                bar_path.addRoundedRect(QRectF(16, bar_y, bar_w, bar_h), 4, 4)
+                bar_path.addRoundedRect(QRectF(cell_x, bar_y, bar_w, bar_h), 4, 4)
                 p.setClipPath(bar_path)
-                p.drawRoundedRect(16, bar_y, fill_w, bar_h, fill_radius, fill_radius)
+                p.drawRoundedRect(cell_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
                 p.restore()
 
     def _paint_third_party(self, p: QPainter):

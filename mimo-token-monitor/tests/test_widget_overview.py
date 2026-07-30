@@ -75,7 +75,7 @@ class TestOverviewFetchDispatch(unittest.TestCase):
 
 
 class TestHeightSwitch(unittest.TestCase):
-    """Window height changes between base and overview."""
+    """Overview uses the same compact height as the other display modes."""
 
     def test_base_height(self):
         w = _make_widget(display_mode=MIMO_MODE)
@@ -84,7 +84,8 @@ class TestHeightSwitch(unittest.TestCase):
 
     def test_overview_height(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)
-        self.assertEqual(w.height(), OVERVIEW_HEIGHT)
+        self.assertEqual(w.height(), BASE_HEIGHT)
+        self.assertEqual(OVERVIEW_HEIGHT, BASE_HEIGHT)
         w.close()
 
     def test_switch_restores_height(self):
@@ -118,14 +119,15 @@ class TestOverviewPercentFormat(unittest.TestCase):
 
 
 class TestOverviewRowMetrics(unittest.TestCase):
-    """Each overview row's y-layout is non-overlapping and ordered."""
+    """Overview rows stack vertically and fit inside the compact window."""
 
-    def test_two_rows_no_overlap(self):
+    def test_two_rows_stack_without_overlap(self):
         r0 = TokenWidget._overview_row_metrics(0)
         r1 = TokenWidget._overview_row_metrics(1)
-        self.assertLess(r0[0], r1[0])
-        bar_bottom_0 = r0[2] + r0[4]
-        self.assertLessEqual(bar_bottom_0, r1[0])
+        self.assertEqual(r0[0], r1[0])
+        self.assertLess(r0[1], r1[1])
+        self.assertLessEqual(r0[2] + r0[4], r1[1] - 16)
+        self.assertLessEqual(r1[2] + r1[4] + 24, BASE_HEIGHT)
 
     def test_bar_width_positive(self):
         _, _, _, bw, bh = TokenWidget._overview_row_metrics(0)
@@ -309,11 +311,14 @@ class TestOverviewRenderSmoke(unittest.TestCase):
         _app.processEvents()
         w.render(img)
 
-        _, _, bar_y1, _, bar_h1 = TokenWidget._overview_row_metrics(1)
+        x0, _, bar_y0, bar_w0, bar_h0 = TokenWidget._overview_row_metrics(0)
+        x1, _, bar_y1, bar_w1, bar_h1 = TokenWidget._overview_row_metrics(1)
         bottom = bar_y1 + bar_h1 + 24
         self.assertLessEqual(bottom, w.height())
-        self.assertGreater(img.pixelColor(30, bar_y1 + bar_h1 // 2).alpha(), 0)
-        self.assertGreater(img.pixelColor(230, bar_y1 + bar_h1 // 2).alpha(), 0)
+        self.assertEqual(x0, x1)
+        self.assertLess(bar_y0, bar_y1)
+        self.assertGreater(img.pixelColor(x0 + bar_w0 // 2, bar_y0 + bar_h0 // 2).alpha(), 0)
+        self.assertGreater(img.pixelColor(x1 + bar_w1 // 2, bar_y1 + bar_h1 // 2).alpha(), 0)
         w.close()
 
 
