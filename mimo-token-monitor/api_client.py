@@ -89,6 +89,20 @@ def fetch_usage(cookie: str) -> dict:
 DEFAULT_THIRD_PARTY_BASE_URL = "http://codex.wlbclub.com"
 
 
+def _third_party_usage_url(base_url: str) -> str:
+    """Build the usage endpoint without duplicating a user-supplied /v1 path."""
+    base = (base_url or DEFAULT_THIRD_PARTY_BASE_URL).strip().rstrip("/")
+    if not base:
+        base = DEFAULT_THIRD_PARTY_BASE_URL
+
+    lower_base = base.casefold()
+    if lower_base.endswith("/v1/usage"):
+        return base
+    if lower_base.endswith("/v1"):
+        return f"{base}/usage"
+    return f"{base}/v1/usage"
+
+
 def parse_third_party_usage(data, window: str = "7d") -> dict:
     """Parse third-party usage API response."""
     empty = {
@@ -160,14 +174,10 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
 def fetch_third_party_usage(base_url: str, api_key: str, window: str = "7d") -> dict:
     """Fetch third-party usage from external API.
 
-    GET base_url/v1/usage with Authorization: Bearer apiKey.
+    GET the normalized base_url/v1/usage endpoint with Authorization: Bearer apiKey.
     Returns: ok, data, error, url
     """
-    base_url = (base_url or DEFAULT_THIRD_PARTY_BASE_URL).strip().rstrip("/")
-    if not base_url:
-        base_url = DEFAULT_THIRD_PARTY_BASE_URL
-
-    url = f"{base_url.rstrip('/')}/v1/usage"
+    url = _third_party_usage_url(base_url)
 
     if not str(api_key or "").strip():
         return {"ok": False, "data": None, "error": "API Key 不能为空", "url": url}

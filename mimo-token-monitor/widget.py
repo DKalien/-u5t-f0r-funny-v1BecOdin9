@@ -185,7 +185,7 @@ class SettingsDialog(QDialog):
 
         # third-party usage settings
         self.tp_base_url_edit = QLineEdit(cfg.get("third_party_base_url", "http://codex.wlbclub.com"))
-        self.tp_base_url_edit.setPlaceholderText("默认 http://codex.wlbclub.com，不要填 /v1")
+        self.tp_base_url_edit.setPlaceholderText("可填主域名、/v1 或完整 /v1/usage，程序会自动规范")
         layout.addRow("API Base URL:", self.tp_base_url_edit)
 
         self.tp_api_key_edit = QLineEdit(cfg.get("third_party_api_key", ""))

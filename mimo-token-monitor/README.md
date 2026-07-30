@@ -68,7 +68,7 @@ python main.py
 
 在设置中填写 **API Base URL** 和 **API Key** 后，可通过标题栏循环图标切换到第三方用量显示模式或“总览”页面：
 
-- **Base URL**：默认 http://codex.wlbclub.com，不要填写 /v1（程序自动拼接 /v1/usage）
+- **Base URL**：默认 http://codex.wlbclub.com；可填写主域名、`/v1` 或完整的 `/v1/usage`，程序会自动避免重复拼接
 - **API Key**：来自 CC Switch 的 API Key
 - 切换后悬浮窗显示剩余百分比、已用百分比、7 天窗口和状态
 - 未配置 API Key 时切换会显示提示，不会发送空请求
