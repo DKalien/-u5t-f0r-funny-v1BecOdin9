@@ -1,0 +1,321 @@
+# encoding: utf-8
+import os, sys, unittest, pathlib
+
+# Ensure mimo-token-monitor package is importable
+_root = pathlib.Path(__file__).resolve().parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PyQt6.QtWidgets import QApplication
+
+# Ensure QApplication exists
+_app = QApplication.instance() or QApplication(sys.argv)
+
+from widget import (
+    TokenWidget,
+    MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
+    BASE_HEIGHT, OVERVIEW_HEIGHT,
+    _bar_color, _fmt_tokens,
+)
+
+
+def _make_widget(**overrides):
+    """Create a TokenWidget with safe defaults (no real network/config)."""
+    cfg = {
+        "display_mode": MIMO_MODE,
+        "position": [200, 200],
+        "always_on_top": False,
+        "opacity": 1.0,
+        "refresh_interval": 99999,
+        "cookie": "",
+        "third_party_api_key": "",
+        "third_party_base_url": "http://example.com",
+    }
+    cfg.update(overrides)
+    w = TokenWidget(cfg)
+    return w
+
+
+class TestModeCycle(unittest.TestCase):
+    """Mode cycle order: mimo -> third_party -> overview -> mimo."""
+
+    def test_cycle_order(self):
+        w = _make_widget(display_mode=MIMO_MODE)
+        self.assertEqual(w.cfg["display_mode"], MIMO_MODE)
+        w._toggle_display_mode()
+        self.assertEqual(w.cfg["display_mode"], THIRD_PARTY_MODE)
+        w._toggle_display_mode()
+        self.assertEqual(w.cfg["display_mode"], OVERVIEW_MODE)
+        w._toggle_display_mode()
+        self.assertEqual(w.cfg["display_mode"], MIMO_MODE)
+        w.close()
+
+    def test_cycle_from_overview(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        w._toggle_display_mode()
+        self.assertEqual(w.cfg["display_mode"], MIMO_MODE)
+        w.close()
+
+
+class TestOverviewFetchDispatch(unittest.TestCase):
+    """Overview refresh dispatches both real sources without network calls in the UI thread."""
+
+    def test_overview_starts_both_sources(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake", third_party_api_key="k")
+        calls = []
+        w._do_fetch_mimo = lambda: calls.append("mimo")
+        w._do_fetch_third_party = lambda: calls.append("third_party")
+
+        w._do_fetch()
+
+        self.assertEqual(calls, ["mimo", "third_party"])
+        w.close()
+
+
+class TestHeightSwitch(unittest.TestCase):
+    """Window height changes between base and overview."""
+
+    def test_base_height(self):
+        w = _make_widget(display_mode=MIMO_MODE)
+        self.assertEqual(w.height(), BASE_HEIGHT)
+        w.close()
+
+    def test_overview_height(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        self.assertEqual(w.height(), OVERVIEW_HEIGHT)
+        w.close()
+
+    def test_switch_restores_height(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        self.assertEqual(w.height(), OVERVIEW_HEIGHT)
+        w._set_display_mode(MIMO_MODE)
+        self.assertEqual(w.height(), BASE_HEIGHT)
+        w.close()
+
+
+class TestOverviewPercentFormat(unittest.TestCase):
+    """Static formatting for overview percentage labels."""
+
+    def test_not_configured(self):
+        self.assertEqual(TokenWidget._format_overview_percent(None, False), "\u672a\u914d\u7f6e")
+
+    def test_no_data(self):
+        self.assertEqual(TokenWidget._format_overview_percent(None, True), "--")
+
+    def test_zero(self):
+        self.assertEqual(TokenWidget._format_overview_percent(0.0, True), "0.0%")
+
+    def test_mid(self):
+        self.assertEqual(TokenWidget._format_overview_percent(42.5, True), "42.5%")
+
+    def test_clamp_above(self):
+        self.assertEqual(TokenWidget._format_overview_percent(150.0, True), "100.0%")
+
+    def test_clamp_below(self):
+        self.assertEqual(TokenWidget._format_overview_percent(-10.0, True), "0.0%")
+
+
+class TestOverviewRowMetrics(unittest.TestCase):
+    """Each overview row's y-layout is non-overlapping and ordered."""
+
+    def test_two_rows_no_overlap(self):
+        r0 = TokenWidget._overview_row_metrics(0)
+        r1 = TokenWidget._overview_row_metrics(1)
+        self.assertLess(r0[0], r1[0])
+        bar_bottom_0 = r0[2] + r0[4]
+        self.assertLessEqual(bar_bottom_0, r1[0])
+
+    def test_bar_width_positive(self):
+        _, _, _, bw, bh = TokenWidget._overview_row_metrics(0)
+        self.assertGreater(bw, 0)
+        self.assertGreater(bh, 0)
+
+
+class TestMimoTooltipLines(unittest.TestCase):
+    """MiMo tooltip builder returns plan percentage when data exists."""
+
+    def test_with_plan_data(self):
+        w = _make_widget(cookie="fake")
+        w._plan_total = 1000
+        w._plan_used = 250
+        lines = w._build_mimo_tooltip_lines()
+        joined = "\n".join(lines)
+        self.assertIn("Token Plan: 25.0%", joined)
+        w.close()
+
+    def test_no_plan(self):
+        w = _make_widget(cookie="fake")
+        w._plan_total = 0
+        lines = w._build_mimo_tooltip_lines()
+        self.assertNotIn("Token Plan", "\n".join(lines))
+        w.close()
+
+
+class TestThirdPartyTooltipLines(unittest.TestCase):
+    """Third-party tooltip builder shows percentages from _tp_data."""
+
+    def test_with_data(self):
+        w = _make_widget(third_party_api_key="k")
+        w._tp_data = {"used_percent": 33.33, "remaining_percent": 66.67,
+                       "is_valid": True, "window": "7d", "total_percent": 100}
+        lines = w._build_third_party_tooltip_lines()
+        joined = "\n".join(lines)
+        self.assertIn("33.33%", joined)
+        self.assertIn("Active", joined)
+        w.close()
+
+    def test_no_data(self):
+        w = _make_widget(third_party_api_key="k")
+        w._tp_data = None
+        lines = w._build_third_party_tooltip_lines()
+        self.assertEqual(lines[0], "Usage API")
+        self.assertEqual(len(lines), 1)
+        w.close()
+
+
+class TestOverviewTooltipLines(unittest.TestCase):
+    """Overview tooltip lists both sources with correct labels."""
+
+    def test_no_config(self):
+        w = _make_widget()
+        lines = w._build_overview_tooltip_lines()
+        joined = "\n".join(lines)
+        self.assertIn("Token Plan: \u672a\u914d\u7f6e", joined)
+        self.assertIn("Usage API: \u672a\u914d\u7f6e", joined)
+        w.close()
+
+    def test_mimo_configured_no_data(self):
+        w = _make_widget(cookie="fake")
+        w._plan_total = 0
+        lines = w._build_overview_tooltip_lines()
+        joined = "\n".join(lines)
+        self.assertIn("Token Plan: --", joined)
+        w.close()
+
+    def test_mimo_with_data(self):
+        w = _make_widget(cookie="fake")
+        w._plan_total = 200
+        w._plan_used = 50
+        lines = w._build_overview_tooltip_lines()
+        joined = "\n".join(lines)
+        self.assertIn("Token Plan: 25.0%", joined)
+        w.close()
+
+    def test_tp_with_data(self):
+        w = _make_widget(third_party_api_key="k")
+        w._tp_data = {"used_percent": 12.5, "remaining_percent": 87.5,
+                       "is_valid": True, "window": "7d", "total_percent": 100}
+        lines = w._build_overview_tooltip_lines()
+        joined = "\n".join(lines)
+        self.assertIn("Usage API: 12.5%", joined)
+        w.close()
+
+    def test_error_included_via_apply(self):
+        """Errors are appended by _apply_overview_tooltip_if_needed, not the builder."""
+        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake")
+        w._mimo_error = "test error"
+        w._tp_error = "api error"
+        w._refresh_error_state()
+        w._apply_overview_tooltip_if_needed()
+        tooltip = w.toolTip()
+        self.assertIn("test error", tooltip)
+        self.assertIn("api error", tooltip)
+        self.assertIn("总览", tooltip)
+        w.close()
+
+
+class TestThirdPartyCallbackExtraction(unittest.TestCase):
+    """Verify _on_third_party_fetch_done extracts flat parsed dict from API wrapper.
+
+    api_client.fetch_third_party_usage() returns:
+        {"ok": True, "data": parsed_dict, "error": None, "url": ...}
+    where parsed_dict contains used_percent, remaining_percent, is_valid, etc.
+    _tp_data must be the flat parsed_dict, not the wrapper.
+    """
+
+    def test_callback_extracts_data_from_ok_wrapper(self):
+        w = _make_widget(display_mode=THIRD_PARTY_MODE, third_party_api_key="k")
+        parsed = {"used_percent": 42.0, "remaining_percent": 58.0,
+                  "is_valid": True, "window": "7d", "total_percent": 100}
+        wrapper = {"ok": True, "data": parsed, "error": None, "url": "http://example.com"}
+        w._on_third_party_fetch_done(wrapper)
+        # _tp_data must be the flat parsed dict
+        self.assertIs(w._tp_data, parsed)
+        self.assertEqual(w._tp_data["used_percent"], 42.0)
+        self.assertEqual(w._last_error, "")
+        w.close()
+
+    def test_callback_sets_error_on_failure(self):
+        w = _make_widget(display_mode=THIRD_PARTY_MODE, third_party_api_key="k")
+        wrapper = {"ok": False, "data": None, "error": "API Key 无效"}
+        w._on_third_party_fetch_done(wrapper)
+        self.assertIsNone(w._tp_data)
+        self.assertIn("无效", w._last_error)
+        w.close()
+
+    def test_callback_does_not_clear_data_on_failure(self):
+        w = _make_widget(display_mode=THIRD_PARTY_MODE, third_party_api_key="k")
+        w._tp_data = {"used_percent": 10.0, "remaining_percent": 90.0,
+                       "is_valid": True, "window": "7d", "total_percent": 100}
+        wrapper = {"ok": False, "data": None, "error": "timeout"}
+        w._on_third_party_fetch_done(wrapper)
+        # Old data should be preserved on failure
+        self.assertIsNotNone(w._tp_data)
+        self.assertEqual(w._tp_data["used_percent"], 10.0)
+        w.close()
+
+    def test_callback_tooltip_reflects_extracted_data(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE, third_party_api_key="k")
+        parsed = {"used_percent": 55.5, "remaining_percent": 44.5,
+                  "is_valid": True, "window": "7d", "total_percent": 100}
+        wrapper = {"ok": True, "data": parsed, "error": None, "url": "http://example.com"}
+        w._on_third_party_fetch_done(wrapper)
+        tooltip = w.toolTip()
+        self.assertIn("55.5%", tooltip)
+        w.close()
+
+
+class TestOverviewDenominatorZero(unittest.TestCase):
+    """_plan_used/_plan_total denominator-zero produces -- and empty bar."""
+
+    def test_zero_denominator(self):
+        w = _make_widget(cookie="fake")
+        w._plan_total = 0
+        w._plan_used = 0
+        has_cookie = True
+        mimo_pct = (w._plan_used / w._plan_total * 100) if has_cookie and w._plan_total > 0 else None
+        self.assertIsNone(mimo_pct)
+        formatted = TokenWidget._format_overview_percent(mimo_pct, has_cookie)
+        self.assertEqual(formatted, "--")
+        w.close()
+
+
+class TestOverviewRenderSmoke(unittest.TestCase):
+    """Smoke-test: render overview mode to QImage without clipping."""
+
+    def test_overview_render_no_clip(self):
+        from PyQt6.QtGui import QImage
+        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake", third_party_api_key="k")
+        w._plan_total = 1000
+        w._plan_used = 300
+        w._tp_data = {"used_percent": 55.0, "remaining_percent": 45.0,
+                       "is_valid": True, "window": "7d", "total_percent": 100}
+        w._last_update = "12:00:00"
+        img = QImage(w.width(), w.height(), QImage.Format.Format_ARGB32)
+        img.fill(0)
+        w.show()
+        _app.processEvents()
+        w.render(img)
+
+        _, _, bar_y1, _, bar_h1 = TokenWidget._overview_row_metrics(1)
+        bottom = bar_y1 + bar_h1 + 24
+        self.assertLessEqual(bottom, w.height())
+        self.assertGreater(img.pixelColor(30, bar_y1 + bar_h1 // 2).alpha(), 0)
+        self.assertGreater(img.pixelColor(230, bar_y1 + bar_h1 // 2).alpha(), 0)
+        w.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

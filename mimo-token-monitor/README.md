@@ -18,6 +18,7 @@
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **第三方用量 API 显示**：标题栏下拉菜单可切换 MiMo Token / API Usage 模式，支持配置第三方 Usage API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
+- **用量总览页面**：标题栏切换到“总览”后，在同一悬浮窗中并列显示 Token Plan 与 Usage API 的使用百分比和进度条
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 - **设置数据库 Git 同步**：程序启动时、窗口显示前拉取远端 `mimo-token-monitor/settings.db`，真正退出时仅提交并推送该文件；关闭到托盘不推送
 - **代码项目 Git 同步**：启动器启动 Python 前检查并快进拉取代码仓库；真正退出时检查 `mimo-token-monitor/` 是否有改动，有改动才提交并推送
@@ -65,7 +66,7 @@ python main.py
 
 ### API Usage 设置（可选）
 
-在设置中填写 **API Base URL** 和 **API Key** 后，可通过标题栏下拉菜单切换到第三方用量显示模式：
+在设置中填写 **API Base URL** 和 **API Key** 后，可通过标题栏循环图标切换到第三方用量显示模式或“总览”页面：
 
 - **Base URL**：默认 http://codex.wlbclub.com，不要填写 /v1（程序自动拼接 /v1/usage）
 - **API Key**：来自 CC Switch 的 API Key
@@ -92,7 +93,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - **拖动**：左键拖动窗口位置（除最小化按钮区域外）
 - **窗口吸附**：将 ETF Tracker 与 MiMo Token Monitor 的边框拖到约 15 个像素以内，会自动对齐左右/上下边框；两个窗口必须同时可见且未最小化，主屏和副屏均有效
 - **置顶按钮**：点击标题栏图钉图标切换置顶/取消置顶；图标高亮表示当前处于置顶状态，取消置顶时显示斜杠
-- **标题栏下拉**：点击标题旁的下拉图标切换 MiMo Token / API Usage 显示模式
+- **标题栏循环图标**：点击标题旁的图标，在 MiMo Token / API Usage / 总览之间循环切换；总览会同时展示两个已接入来源的进度
 - **双击悬浮窗**：立即刷新数据
 - **右键悬浮窗**：刷新 / 从浏览器导入 / 设置 / 查看原始数据 / 退出
 - **悬停悬浮窗**：显示详细 tooltip

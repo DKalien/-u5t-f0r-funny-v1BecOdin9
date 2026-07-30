@@ -18,6 +18,13 @@ import window_snap
 
 SNAP_THRESHOLD = 15  # px, 距屏幕边缘多少像素内触发吸附
 
+MIMO_MODE = "mimo"
+THIRD_PARTY_MODE = "third_party"
+OVERVIEW_MODE = "overview"
+
+BASE_HEIGHT = 140
+OVERVIEW_HEIGHT = 220
+
 # ── Colors ──────────────────────────────────────────────────────
 BG_COLOR = QColor(30, 30, 30, 220)
 TEXT_COLOR = QColor(230, 230, 230)
@@ -252,6 +259,8 @@ class TokenWidget(QWidget):
         self._exit_requested = False
         self._drag_pos = QPoint()
         self._last_error = ""
+        self._mimo_error = ""
+        self._tp_error = ""
         self._last_update = "等待更新..."
         self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
 
@@ -286,7 +295,7 @@ class TokenWidget(QWidget):
         self.setAutoFillBackground(False)
         self.setMouseTracking(True)
         self.setFixedWidth(260)
-        self.setFixedHeight(140)
+        self._apply_size_for_mode(cfg.get("display_mode", MIMO_MODE))
         pos = self._resolve_start_position(cfg.get("position", [100, 100]))
         self.move(*pos)
         if cfg.get("position") != list(pos):
@@ -338,6 +347,102 @@ class TokenWidget(QWidget):
         )
         return (x, y)
 
+    def _apply_size_for_mode(self, mode: str) -> None:
+        """Resize the window consistently when switching display modes."""
+        target_height = OVERVIEW_HEIGHT if mode == OVERVIEW_MODE else BASE_HEIGHT
+        if self.height() == target_height:
+            return
+        top_left = self.geometry().topLeft()
+        self.setFixedHeight(target_height)
+        screen = QApplication.screenAt(top_left)
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        geometry = screen.availableGeometry()
+        x = max(geometry.left(), min(top_left.x(), geometry.right() - self.width() + 1))
+        y = max(geometry.top(), min(top_left.y(), geometry.bottom() - self.height() + 1))
+        self.move(x, y)
+
+    @staticmethod
+    def _normalize_overview_percent(value):
+        try:
+            percent = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(percent):
+            return None
+        return max(0.0, min(100.0, percent))
+
+    @classmethod
+    def _format_overview_percent(cls, value, configured: bool) -> str:
+        if not configured:
+            return "未配置"
+        percent = cls._normalize_overview_percent(value)
+        if percent is None:
+            return "--"
+        return f"{percent:.1f}%"
+
+    @staticmethod
+    def _overview_row_metrics(index: int):
+        base_y = 42 + index * 72
+        return base_y, base_y + 17, base_y + 26, 228, 14
+
+    def _build_mimo_tooltip_lines(self) -> list:
+        lines = []
+        if self._balance is not None and self._balance != 0:
+            lines.append(f"余额: {_fmt_money(self._balance)}")
+        if self._plan_total > 0:
+            pct = self._plan_used / self._plan_total * 100
+            remaining = self._plan_total - self._plan_used
+            lines.append(f"Token Plan: {pct:.1f}%")
+            lines.append(f"已用: {_fmt_tokens(self._plan_used)}")
+            lines.append(f"总额: {_fmt_tokens(self._plan_total)}")
+            lines.append(f"剩余: {_fmt_tokens(max(0, remaining))}")
+            _, _, cost_per_credit = _get_plan_tier_info(self._plan_total)
+            if cost_per_credit:
+                used_cost = self._plan_used * cost_per_credit
+                lines.append(f"已用折合 ≈ ¥{used_cost:.2f}")
+            if self._daily_used > 0:
+                lines.append(f"今日已用 {_fmt_tokens(self._daily_used)}")
+            expiry_date = _format_expiry(self.cfg.get("expiry_date", ""))
+            lines.append(f"有效期至: {expiry_date}")
+        if self._month_limit > 0:
+            m_pct = self._month_used / self._month_limit * 100
+            lines.append(f"本月: {_fmt_tokens(self._month_used)} / {_fmt_tokens(self._month_limit)} ({m_pct:.1f}%)")
+        return lines
+
+    def _build_third_party_tooltip_lines(self) -> list:
+        lines = ["Usage API"]
+        if self._tp_data:
+            d = self._tp_data
+            lines.append(f"剩余: {d.get('remaining_percent', 0):.2f}%")
+            lines.append(f"已用: {d.get('used_percent', 0):.2f}%")
+            lines.append(f"窗口: {d.get('window', '7d')}")
+            lines.append(f"总额: {d.get('total_percent', 100)}%")
+            lines.append(f"状态: {'Active' if d.get('is_valid') else 'Inactive'}")
+        return lines
+
+    def _build_overview_tooltip_lines(self) -> list:
+        lines = ["总览"]
+        has_cookie = bool(self.cfg.get("cookie", "").strip())
+        mimo_pct = (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None
+        lines.append(f"Token Plan: {self._format_overview_percent(mimo_pct, has_cookie)}")
+        has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
+        tp_pct = self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None
+        lines.append(f"Usage API: {self._format_overview_percent(tp_pct, has_api_key)}")
+        return lines
+
+    def _refresh_error_state(self):
+        """Expose the error for the active page without losing either source error."""
+        display_mode = self.cfg.get("display_mode", MIMO_MODE)
+        if display_mode == MIMO_MODE:
+            self._last_error = self._mimo_error
+        elif display_mode == THIRD_PARTY_MODE:
+            self._last_error = self._tp_error
+        else:
+            self._last_error = self._mimo_error or self._tp_error
+
     def _setup_tray(self):
         """Initialize system tray icon and menu."""
         # 兼容 PyInstaller 打包后的路径
@@ -388,11 +493,11 @@ class TokenWidget(QWidget):
         p.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
 
         # Title + display mode switch icon
-        display_mode = self.cfg.get("display_mode", "mimo")
+        display_mode = self.cfg.get("display_mode", MIMO_MODE)
         font_title = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         p.setFont(font_title)
         p.setPen(QPen(TEXT_COLOR))
-        title_text = "MiMo Token" if display_mode == "mimo" else "Usage API"
+        title_text = "总览" if display_mode == OVERVIEW_MODE else ("MiMo Token" if display_mode == MIMO_MODE else "Usage API")
         p.drawText(16, 22, title_text)
 
         # Mode switch icon right after title
@@ -405,7 +510,7 @@ class TokenWidget(QWidget):
         self._draw_switch_icon(p, self._switch_rect)
 
         # Balance on the right (MiMo mode only)
-        if display_mode == "mimo" and self._balance is not None and self._balance != 0:
+        if display_mode == MIMO_MODE and self._balance is not None and self._balance != 0:
             p.setPen(QPen(ACCENT_GREEN))
             p.drawText(150, 22, _fmt_money(self._balance))
 
@@ -423,7 +528,9 @@ class TokenWidget(QWidget):
         p.setFont(font_small)
         p.setPen(QPen(TEXT_COLOR))
 
-        if display_mode == "third_party":
+        if display_mode == OVERVIEW_MODE:
+            self._paint_overview(p)
+        elif display_mode == THIRD_PARTY_MODE:
             self._paint_third_party(p)
         elif self._plan_total > 0:
             pct = self._plan_used / self._plan_total
@@ -498,14 +605,15 @@ class TokenWidget(QWidget):
             p.drawText(16, 50, "等待数据...")
 
         # Update time / error (bottom right)
+        status_y = 208 if display_mode == OVERVIEW_MODE else 134
         p.setPen(QPen(DIM))
         font_tiny = QFont("Microsoft YaHei", 7)
         p.setFont(font_tiny)
         if self._last_error:
             p.setPen(QPen(ACCENT_RED))
-            p.drawText(16, 134, self._last_error[:50])
+            p.drawText(16, status_y, self._last_error[:50])
         else:
-            p.drawText(180, 134, f"更新于 {self._last_update}")
+            p.drawText(180, status_y, f"更新于 {self._last_update}")
 
         p.end()
 
@@ -685,9 +793,14 @@ class TokenWidget(QWidget):
         p.restore()
 
     def _toggle_display_mode(self):
-        """Cycle directly between MiMo Token and API Usage display modes."""
-        current_mode = self.cfg.get("display_mode", "mimo")
-        next_mode = "third_party" if current_mode == "mimo" else "mimo"
+        """Cycle between MiMo Token, API Usage, and overview display modes."""
+        current_mode = self.cfg.get("display_mode", MIMO_MODE)
+        if current_mode == MIMO_MODE:
+            next_mode = THIRD_PARTY_MODE
+        elif current_mode == THIRD_PARTY_MODE:
+            next_mode = OVERVIEW_MODE
+        else:
+            next_mode = MIMO_MODE
         self._set_display_mode(next_mode)
 
     def _set_display_mode(self, mode: str):
@@ -696,8 +809,51 @@ class TokenWidget(QWidget):
             return
         self.cfg["display_mode"] = mode
         save_config(self.cfg)
+        self._refresh_error_state()
+        self._apply_size_for_mode(mode)
         self._do_fetch()
         self.update()
+
+    def _paint_overview(self, p: QPainter):
+        """Paint the overview page listing all available data sources."""
+        has_cookie = bool(self.cfg.get("cookie", "").strip())
+        has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
+
+        rows = [
+            {
+                "name": "Token Plan",
+                "configured": has_cookie,
+                "percent": (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None,
+            },
+            {
+                "name": "Usage API",
+                "configured": has_api_key,
+                "percent": self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None,
+            },
+        ]
+
+        for idx, row in enumerate(rows):
+            name_y, percent_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
+
+            p.setPen(QPen(TEXT_COLOR))
+            p.drawText(16, name_y, row["name"])
+            p.drawText(200, percent_y, self._format_overview_percent(row["percent"], row["configured"]))
+
+            p.setBrush(QBrush(BAR_BG))
+            p.drawRoundedRect(16, bar_y, bar_w, bar_h, 4, 4)
+
+            percent = self._normalize_overview_percent(row["percent"])
+            fraction = 0.0 if percent is None else percent / 100.0
+            fill_w = int(bar_w * fraction)
+            if fill_w > 0:
+                fill_radius = min(4, fill_w // 2)
+                p.setBrush(QBrush(_bar_color(1 - fraction)))
+                p.save()
+                bar_path = QPainterPath()
+                bar_path.addRoundedRect(QRectF(16, bar_y, bar_w, bar_h), 4, 4)
+                p.setClipPath(bar_path)
+                p.drawRoundedRect(16, bar_y, fill_w, bar_h, fill_radius, fill_radius)
+                p.restore()
 
     def _paint_third_party(self, p: QPainter):
         """Paint third-party usage data in the content area."""
@@ -742,9 +898,10 @@ class TokenWidget(QWidget):
             return
         api_key = self.cfg.get("third_party_api_key", "")
         if not api_key:
-            self._last_error = "请在设置中配置 API Key"
+            self._tp_error = "请在设置中配置 API Key"
             self._tp_data = None
-            self._update_tooltip(None, None)
+            self._refresh_error_state()
+            self._apply_overview_tooltip_if_needed()
             self.update()
             return
         base_url = self.cfg.get("third_party_base_url", "http://codex.wlbclub.com")
@@ -758,30 +915,13 @@ class TokenWidget(QWidget):
             return
         if result.get("ok"):
             self._tp_data = result.get("data")
-            self._last_error = ""
+            self._tp_error = ""
         else:
-            self._last_error = result.get("error", "第三方用量查询失败")
+            self._tp_error = result.get("error", "第三方用量查询失败")
+        self._refresh_error_state()
         self._last_update = datetime.now().strftime("%H:%M:%S")
-        self._update_tooltip(None, None)
+        self._apply_overview_tooltip_if_needed()
         self.update()
-
-    def _update_tooltip_third_party(self):
-        """Update tooltip for third-party usage mode."""
-        lines = ["Usage API"]
-        if self._tp_data:
-            d = self._tp_data
-            lines.append(f"剩余: {d.get('remaining_percent', 0):.2f}%")
-            lines.append(f"已用: {d.get('used_percent', 0):.2f}%")
-            lines.append(f"窗口: {d.get('window', '7d')}")
-            lines.append(f"总额: {d.get('total_percent', 100)}%")
-            status = "Active" if d.get("is_valid") else "Inactive"
-            lines.append(f"状态: {status}")
-        if self._last_error:
-            lines.append(f"错误: {self._last_error}")
-        tooltip_text = "\n".join(lines)
-        self.setToolTip(tooltip_text)
-        if hasattr(self, '_tray_icon'):
-            self._tray_icon.setToolTip(tooltip_text[:128] if len(tooltip_text) > 128 else tooltip_text)
 
     # ── Mouse events ────────────────────────────────────────────
     def mousePressEvent(self, e):
@@ -1020,17 +1160,28 @@ class TokenWidget(QWidget):
     def _do_fetch(self):
         if self._exit_requested:
             return
-        display_mode = self.cfg.get("display_mode", "mimo")
-        if display_mode == "third_party":
+        display_mode = self.cfg.get("display_mode", MIMO_MODE)
+        if display_mode == OVERVIEW_MODE:
+            self._do_fetch_mimo()
             self._do_fetch_third_party()
             return
+        if display_mode == THIRD_PARTY_MODE:
+            self._do_fetch_third_party()
+            return
+        self._do_fetch_mimo()
 
+    def _do_fetch_mimo(self):
+        """Dispatch MiMo plan/balance fetch."""
+        if self._exit_requested:
+            return
         if hasattr(self, "_worker") and self._worker.isRunning():
             return
 
         cookie = self.cfg.get("cookie", "")
         if not cookie:
-            self._last_error = "请先在设置中填入 Cookie"
+            self._mimo_error = "请先在设置中填入 Cookie"
+            self._refresh_error_state()
+            self._apply_overview_tooltip_if_needed()
             self.update()
             return
 
@@ -1042,11 +1193,12 @@ class TokenWidget(QWidget):
         if self._exit_requested:
             return
         if not bal_result["ok"]:
-            self._last_error = bal_result.get("error", "余额查询失败")
+            self._mimo_error = bal_result.get("error", "余额查询失败")
         elif not usage_result["ok"]:
-            self._last_error = usage_result.get("error", "用量查询失败")
+            self._mimo_error = usage_result.get("error", "用量查询失败")
         else:
-            self._last_error = ""
+            self._mimo_error = ""
+        self._refresh_error_state()
 
         # Parse balance
         if bal_result["ok"] and bal_result["balance"] is not None:
@@ -1059,9 +1211,30 @@ class TokenWidget(QWidget):
             self._update_daily_baseline()
 
         self._last_update = datetime.now().strftime("%H:%M:%S")
-        self._update_tooltip(bal_result, usage_result)
+        self._apply_overview_tooltip_if_needed()
         self._write_snapshot()
         self.update()
+
+    def _apply_overview_tooltip_if_needed(self):
+        """Build tooltip for the current display mode."""
+        display_mode = self.cfg.get("display_mode", MIMO_MODE)
+        if display_mode == MIMO_MODE:
+            lines = self._build_mimo_tooltip_lines()
+        elif display_mode == THIRD_PARTY_MODE:
+            lines = self._build_third_party_tooltip_lines()
+        else:
+            lines = self._build_overview_tooltip_lines()
+        if display_mode == OVERVIEW_MODE:
+            if self._mimo_error:
+                lines.append(f"Token Plan 错误: {self._mimo_error}")
+            if self._tp_error:
+                lines.append(f"Usage API 错误: {self._tp_error}")
+        elif self._last_error:
+            lines.append(f"错误: {self._last_error}")
+        tooltip_text = "\n".join(lines)
+        self.setToolTip(tooltip_text)
+        if hasattr(self, '_tray_icon'):
+            self._tray_icon.setToolTip(tooltip_text[:128] if len(tooltip_text) > 128 else tooltip_text)
 
     def _parse_plan(self, data):
         """Parse usage info from API response.
@@ -1138,44 +1311,6 @@ class TokenWidget(QWidget):
             self.cfg["daily_baseline_usage"] = self._month_used
             save_config(self.cfg)
             self._daily_used = 0
-
-    def _update_tooltip(self, bal_result, usage_result):
-        display_mode = self.cfg.get("display_mode", "mimo")
-        if display_mode == "third_party":
-            self._update_tooltip_third_party()
-            return
-
-        lines = []
-        if self._balance is not None and self._balance != 0:
-            lines.append(f"余额: {_fmt_money(self._balance)}")
-        if self._plan_total > 0:
-            pct = self._plan_used / self._plan_total * 100
-            remaining = self._plan_total - self._plan_used
-            lines.append(f"Token Plan: {pct:.1f}%")
-            lines.append(f"已用: {_fmt_tokens(self._plan_used)}")
-            lines.append(f"总额: {_fmt_tokens(self._plan_total)}")
-            lines.append(f"剩余: {_fmt_tokens(max(0, remaining))}")
-            _, _, cost_per_credit = _get_plan_tier_info(self._plan_total)
-            if cost_per_credit:
-                used_cost = self._plan_used * cost_per_credit
-                lines.append(f"已用折合 ≈ ¥{used_cost:.2f}")
-            # Daily usage
-            if self._daily_used > 0:
-                lines.append(f"今日已用 {_fmt_tokens(self._daily_used)}")
-            expiry_date = _format_expiry(self.cfg.get("expiry_date", ""))
-            lines.append(f"有效期至: {expiry_date}")
-        if self._month_limit > 0:
-            m_pct = self._month_used / self._month_limit * 100
-            lines.append(f"本月: {_fmt_tokens(self._month_used)} / {_fmt_tokens(self._month_limit)} ({m_pct:.1f}%)")
-        if self._last_error:
-            lines.append(f"错误: {self._last_error}")
-        tooltip_text = "\n".join(lines)
-        self.setToolTip(tooltip_text)
-        # 同步更新托盘图标 tooltip
-        if hasattr(self, '_tray_icon'):
-            # 系统托盘 tooltip 最长 128 字符（Windows 限制）
-            self._tray_icon.setToolTip(tooltip_text[:128] if len(tooltip_text) > 128 else tooltip_text)
-
     # ── Snapshot ─────────────────────────────────────────────────
     def _write_snapshot(self):
         """Write usage snapshot for claude-hud to read."""
@@ -1192,7 +1327,7 @@ class TokenWidget(QWidget):
             month_limit=self._month_limit,
             daily_used=self._daily_used,
             expiry_date=self.cfg.get("expiry_date", ""),
-            error=self._last_error if self._last_error else None,
+            error=self._mimo_error if self._mimo_error else None,
         )
 
     # ── Actions ─────────────────────────────────────────────────
