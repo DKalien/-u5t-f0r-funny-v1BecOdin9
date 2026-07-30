@@ -264,6 +264,41 @@ class TestLifecycleDegradation(unittest.TestCase):
         dialog_type.return_value.setWindowTitle.assert_called_once_with("MiMo Token - 首次配置")
         save_config.assert_not_called()
 
+    @patch("main.save_config")
+    @patch("main.load_config", return_value={})
+    @patch("main.run_startup_sync", return_value=SyncResult(
+        SyncStatus.SKIPPED, "config", "同步配置无效"
+    ))
+    @patch("main.SettingsDialog")
+    def test_first_configuration_registers_dialog_for_activation(
+        self, dialog_type, _sync, _load, save_config
+    ):
+        from PyQt6.QtWidgets import QDialog
+        from main import initialize_window
+
+        dialog = dialog_type.return_value
+        dialog.exec.return_value = QDialog.DialogCode.Accepted
+        dialog.get_config.return_value = {"cookie": "configured"}
+        register_target = Mock()
+
+        with patch("main.TokenWidget") as widget_type:
+            widget_type.return_value.show = Mock()
+            widget, _result = initialize_window(
+                self.app,
+                Mock(),
+                activation_target_callback=register_target,
+            )
+
+        self.assertIs(widget, widget_type.return_value)
+        register_target.assert_any_call(dialog)
+        register_target.assert_any_call(widget)
+        self.assertEqual(register_target.call_count, 2)
+        dialog.setWindowFlag.assert_called_once()
+        dialog.show.assert_called_once()
+        dialog.raise_.assert_called_once()
+        dialog.activateWindow.assert_called_once()
+        save_config.assert_called_once_with({"cookie": "configured"})
+
     @patch("main.run_startup_sync")
     @patch("main.build_sync_service")
     @patch("main.activate_existing_instance")

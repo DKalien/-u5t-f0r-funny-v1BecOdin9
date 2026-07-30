@@ -4,7 +4,7 @@ import sys
 from ctypes import wintypes
 from pathlib import Path
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import QApplication, QDialog
 
 from config import load_config, save_config
@@ -136,6 +136,7 @@ def initialize_window(
     code_service=None,
     code_sync_result=None,
     config_result=None,
+    activation_target_callback=None,
 ):
     data_result = (
         run_startup_sync(service, app)
@@ -151,6 +152,15 @@ def initialize_window(
     if not cfg.get("cookie"):
         dlg = SettingsDialog(cfg)
         dlg.setWindowTitle("MiMo Token - 首次配置")
+        if activation_target_callback is not None:
+            activation_target_callback(dlg)
+        # A first-run dialog is the only visible window at this point.  Make
+        # it foreground explicitly because pythonw-launched Qt dialogs can be
+        # created behind the active application on Windows.
+        dlg.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
         if dlg.exec() == QDialog.DialogCode.Accepted:
             cfg = dlg.get_config()
             save_config(cfg)
@@ -169,6 +179,8 @@ def initialize_window(
     )
     widget._exit_callback = controller.request_exit
     widget._exit_sync_controller = controller
+    if activation_target_callback is not None:
+        activation_target_callback(widget)
     widget.show()
     return widget, startup_result
 
@@ -188,6 +200,30 @@ def main() -> int:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
 
+        activation_target = [None]
+
+        def register_activation_target(target):
+            activation_target[0] = target
+
+        activation_timer = QTimer()
+        activation_timer.setInterval(250)
+
+        def restore_existing_window():
+            target = activation_target[0]
+            if target is None:
+                return
+            if not activation_requested(activation_event):
+                return
+            if hasattr(target, "_show_window"):
+                target._show_window()
+                return
+            target.show()
+            target.raise_()
+            target.activateWindow()
+
+        activation_timer.timeout.connect(restore_existing_window)
+        activation_timer.start()
+
         service, config_result = build_sync_service()
         widget, startup_result = initialize_window(
             app,
@@ -195,21 +231,14 @@ def main() -> int:
             code_service=code_service,
             code_sync_result=code_startup_result,
             config_result=config_result,
+            activation_target_callback=register_activation_target,
         )
         if widget is None:
             return 0
-
-        activation_timer = QTimer()
-        activation_timer.setInterval(250)
-
-        def restore_existing_window():
-            if activation_requested(activation_event):
-                widget._show_window()
-
-        activation_timer.timeout.connect(restore_existing_window)
-        activation_timer.start()
         return app.exec()
     finally:
+        if "activation_timer" in locals():
+            activation_timer.stop()
         kernel32.CloseHandle(activation_event)
         kernel32.CloseHandle(mutex)
 
