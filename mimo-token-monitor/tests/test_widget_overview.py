@@ -1,10 +1,31 @@
 # encoding: utf-8
-import os, sys, unittest, pathlib
+import os, sys, tempfile, unittest, pathlib
 
 # Ensure mimo-token-monitor package is importable
 _root = pathlib.Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
+
+# Isolate MIMO_TOKEN_MONITOR_DATA_DIR so save_config never writes production settings.db
+_orig_data_dir = os.environ.get("MIMO_TOKEN_MONITOR_DATA_DIR")
+_test_data_tmp = tempfile.mkdtemp(prefix="mimo_widget_test_")
+os.environ["MIMO_TOKEN_MONITOR_DATA_DIR"] = _test_data_tmp
+
+
+def setUpModule():
+    """Ensure the data-dir env var points to a temp directory before any config import."""
+    os.environ["MIMO_TOKEN_MONITOR_DATA_DIR"] = _test_data_tmp
+
+
+def tearDownModule():
+    """Restore the original env var and clean up the temp directory."""
+    import shutil
+    if _orig_data_dir is not None:
+        os.environ["MIMO_TOKEN_MONITOR_DATA_DIR"] = _orig_data_dir
+    else:
+        os.environ.pop("MIMO_TOKEN_MONITOR_DATA_DIR", None)
+    shutil.rmtree(_test_data_tmp, ignore_errors=True)
+
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

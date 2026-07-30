@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -6,7 +7,14 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from data_sync import DataSyncService, GitCommandError, SyncConfig, SyncStatus, _sanitize_detail
+from data_sync import (
+    DataSyncService,
+    GitCommandError,
+    SyncConfig,
+    SyncStatus,
+    _read_auth_fields,
+    _sanitize_detail,
+)
 
 
 class TestSyncConfig(unittest.TestCase):
@@ -241,6 +249,50 @@ def write_db(path: Path, value: str) -> None:
         conn.close()
 
 
+
+def write_malformed_auth_db(path: Path) -> None:
+    """Write a settings DB where cookie value is not valid JSON."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        conn.execute("INSERT INTO settings VALUES ('cookie', 'not-valid-json{{')")
+        conn.execute("INSERT INTO settings VALUES ('third_party_api_key', '""')")
+        conn.execute("INSERT INTO settings VALUES ('refresh_interval', '300')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+
+def write_null_auth_db(path: Path) -> None:
+    """Write a settings DB where cookie is JSON null."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        conn.execute("INSERT INTO settings VALUES ('cookie', 'null')")
+        conn.execute("INSERT INTO settings VALUES ('third_party_api_key', '""')")
+        conn.execute("INSERT INTO settings VALUES ('refresh_interval', '300')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def write_int_auth_db(path: Path) -> None:
+    """Write a settings DB where cookie is a JSON integer (not a string)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        conn.execute("INSERT INTO settings VALUES ('cookie', '42')")
+        conn.execute("INSERT INTO settings VALUES ('third_party_api_key', '""')")
+        conn.execute("INSERT INTO settings VALUES ('refresh_interval', '300')")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def read_cookie(path: Path) -> str:
     conn = sqlite3.connect(path)
     try:
@@ -258,6 +310,20 @@ def read_cookie_from_git(repo: Path, path: str) -> str:
         return read_cookie(Path(temp.name))
     finally:
         Path(temp.name).unlink(missing_ok=True)
+
+
+def write_auth_db(path: Path, cookie: str = "", **extra) -> None:
+    """Write a settings DB with specific auth fields."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        conn.execute("INSERT INTO settings VALUES ('cookie', ?)", (json.dumps(cookie),))
+        for key, value in extra.items():
+            conn.execute("INSERT INTO settings VALUES (?, ?)", (key, json.dumps(value)))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class GitRepoFixture:
@@ -591,3 +657,224 @@ class TestPullRemoteDatabase(unittest.TestCase):
         result = DataSyncService(self.fixture.config()).pull_remote_database()
         self.assertEqual(result.status, SyncStatus.FAILED)
         self.assertEqual(read_cookie(db), '"local-safe"')
+
+
+class TestAuthGuard(unittest.TestCase):
+    """Auth guard: prevent empty-auth overwriting valid-auth configs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mimo_auth_")
+        self.fixture = GitRepoFixture(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_push_empty_local_blocks_effective_remote(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_auth_db(db, cookie="")
+        result = DataSyncService(self.fixture.config()).push_local_database()
+        self.assertEqual(result.status, SyncStatus.SKIPPED)
+        self.assertEqual(result.stage, "push")
+        self.assertEqual(
+            read_cookie_from_git(self.fixture.remote, "mimo-token-monitor/settings.db"),
+            '"remote-v1"',
+        )
+
+    def test_push_local_with_auth_allows_push(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_auth_db(db, cookie="local-valid")
+        result = DataSyncService(self.fixture.config()).push_local_database()
+        self.assertEqual(result.status, SyncStatus.SUCCESS)
+
+    def test_push_empty_local_allows_when_remote_also_empty(self):
+        remote_db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        remote_db.unlink()
+        write_auth_db(remote_db, cookie="")
+        run_git(self.fixture.repo, "add", ".")
+        run_git(self.fixture.repo, "commit", "-m", "empty remote auth")
+        run_git(self.fixture.repo, "push", "origin", "main")
+        local_db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        local_db.unlink()
+        write_auth_db(local_db, cookie="")
+        result = DataSyncService(self.fixture.config()).push_local_database()
+        # Both empty => fail-closed: no valid auth on either side
+        self.assertEqual(result.status, SyncStatus.FAILED)
+
+
+
+    def test_pull_empty_remote_protects_local_with_auth(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_auth_db(db, cookie="local-v1")
+        empty_db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        empty_db.unlink()
+        write_auth_db(empty_db, cookie="")
+        blob = run_git(self.fixture.repo, "hash-object", "-w", str(empty_db)).stdout.strip().decode()
+        run_git(self.fixture.repo, "update-index", "--cacheinfo", "100644", blob,
+                "mimo-token-monitor/settings.db")
+        run_git(self.fixture.repo, "commit", "-m", "empty remote auth")
+        run_git(self.fixture.repo, "push", "origin", "main")
+        db2 = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db2.unlink()
+        write_auth_db(db2, cookie="local-v1")
+        result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.SKIPPED)
+        self.assertEqual(result.stage, "pull")
+        local_cfg = read_cookie(self.fixture.repo / "mimo-token-monitor" / "settings.db")
+        self.assertEqual(local_cfg, '"local-v1"')
+
+
+class TestAuthFailureGuard(unittest.TestCase):
+    """Guard must block push/pull when auth read returns None (malformed or I/O failure)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mimo_authfail_")
+        self.fixture = GitRepoFixture(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_read_auth_fields_returns_none_for_malformed_json(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_malformed_auth_db(db)
+        result = _read_auth_fields(db)
+        self.assertIsNone(result)
+
+    def test_push_blocked_when_local_auth_malformed(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_malformed_auth_db(db)
+        result = DataSyncService(self.fixture.config()).push_local_database()
+        # local_auth=None => immediate FAILED before reading remote
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("本地", result.message)
+        self.assertIn("认证", result.message)
+        self.assertEqual(
+            read_cookie_from_git(self.fixture.remote, "mimo-token-monitor/settings.db"),
+            '"remote-v1"',
+        )
+
+    def test_push_blocked_when_remote_auth_malformed(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_auth_db(db, cookie="")
+        # Commit a malformed-auth DB to the remote so _read_auth_fields returns None
+        malformed = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        malformed.unlink()
+        write_malformed_auth_db(malformed)
+        blob = run_git(self.fixture.repo, "hash-object", "-w", str(malformed)).stdout.strip().decode()
+        run_git(self.fixture.repo, "update-index", "--cacheinfo", "100644", blob,
+                "mimo-token-monitor/settings.db")
+        run_git(self.fixture.repo, "commit", "-m", "malformed remote auth")
+        run_git(self.fixture.repo, "push", "origin", "main")
+        local = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        local.unlink()
+        write_auth_db(local, cookie="")
+        result = DataSyncService(self.fixture.config()).push_local_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("认证", result.message)
+
+
+
+    def test_push_local_malformed_remote_empty(self):
+        """Malformed local auth => FAILED even when remote has empty auth."""
+        # Replace remote with empty-auth DB
+        remote_db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        remote_db.unlink()
+        write_auth_db(remote_db, cookie="")
+        run_git(self.fixture.repo, "add", ".")
+        run_git(self.fixture.repo, "commit", "-m", "empty remote auth")
+        run_git(self.fixture.repo, "push", "origin", "main")
+        # Local with malformed auth
+        local_db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        local_db.unlink()
+        write_malformed_auth_db(local_db)
+        result = DataSyncService(self.fixture.config()).push_local_database()
+        # local_auth=None => immediate FAILED regardless of remote state
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("本地", result.message)
+
+    def test_pull_missing_local_malformed_remote(self):
+        """Missing local DB + malformed remote auth => FAILED (remote_auth None => FAILED)."""
+        # Commit malformed-auth DB to remote
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_malformed_auth_db(db)
+        blob = run_git(self.fixture.repo, "hash-object", "-w", str(db)).stdout.strip().decode()
+        run_git(self.fixture.repo, "update-index", "--cacheinfo", "100644", blob,
+                "mimo-token-monitor/settings.db")
+        run_git(self.fixture.repo, "commit", "-m", "malformed remote auth")
+        run_git(self.fixture.repo, "push", "origin", "main")
+        # Remove local DB so pull attempts to create from remote
+        db.unlink()
+        result = DataSyncService(self.fixture.config()).pull_remote_database()
+        # remote_auth=None => FAILED before any local check
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("认证", result.message)
+        # Local must not have been created by a failed pull
+        self.assertFalse(db.exists())
+
+    def test_read_auth_fields_null_returns_none(self):
+        """JSON null stored in an auth field must return None (fail closed)."""
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_null_auth_db(db)
+        result = _read_auth_fields(db)
+        self.assertIsNone(result)
+
+    def test_read_auth_fields_non_string_returns_none(self):
+        """Non-string JSON value (int) in auth field must return None."""
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_int_auth_db(db)
+        result = _read_auth_fields(db)
+        self.assertIsNone(result)
+
+    def test_push_blocked_when_local_auth_null(self):
+        """JSON null cookie in local DB => FAILED (local_auth is None)."""
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_null_auth_db(db)
+        result = DataSyncService(self.fixture.config()).push_local_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+
+    def test_pull_blocked_when_local_auth_malformed(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_malformed_auth_db(db)
+        result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("认证", result.message)
+        self.assertTrue(db.exists())
+        # Verify local DB was NOT overwritten
+        conn = sqlite3.connect(db)
+        try:
+            cookie_val = conn.execute("SELECT value_json FROM settings WHERE key='cookie'").fetchone()[0]
+            self.assertEqual(cookie_val, "not-valid-json{{")
+        finally:
+            conn.close()
+
+    def test_pull_blocked_when_remote_auth_malformed(self):
+        """Remote blob with malformed auth field should block pull."""
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_auth_db(db, cookie="local-ok")
+        # Commit malformed auth to remote
+        malformed = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        malformed.unlink()
+        write_malformed_auth_db(malformed)
+        blob = run_git(self.fixture.repo, "hash-object", "-w", str(malformed)).stdout.strip().decode()
+        run_git(self.fixture.repo, "update-index", "--cacheinfo", "100644", blob,
+                "mimo-token-monitor/settings.db")
+        run_git(self.fixture.repo, "commit", "-m", "malformed remote auth")
+        run_git(self.fixture.repo, "push", "origin", "main")
+        # Restore local with valid auth
+        db2 = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db2.unlink()
+        write_auth_db(db2, cookie="local-ok")
+        result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("认证", result.message)

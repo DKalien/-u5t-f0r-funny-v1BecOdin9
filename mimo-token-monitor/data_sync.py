@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import Enum
 from contextlib import contextmanager
@@ -130,6 +131,80 @@ def _positive_int(name: str, default: int) -> int:
     if value <= 0:
         raise ValueError(f"{name} 必须是正整数")
     return value
+# -- 认证状态读取工具 --
+_AUTH_FIELDS = ("cookie", "third_party_api_key", "gpt_session_cookie")
+
+
+def _read_auth_fields(db_path: Path) -> dict[str, str] | None:
+    """Read authentication fields from a SQLite settings database.
+
+    Returns a dict mapping each AUTH_FIELDS key to its stripped value,
+    or None when the database cannot be read or any auth field value is
+    malformed (fail closed).
+    """
+    if not db_path.is_file():
+        return None
+    conn = None
+    try:
+        uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        rows = conn.execute(
+            "SELECT key, value_json FROM settings"
+        ).fetchall()
+        raw: dict[str, str] = {}
+        for key, value_json in rows:
+            raw[key] = value_json
+        cfg: dict[str, str] = {}
+        for field in _AUTH_FIELDS:
+            value_json = raw.get(field)
+            if value_json is None:
+                cfg[field] = ""
+                continue
+            try:
+                parsed = json.loads(value_json)
+            except Exception:
+                # Auth field value is malformed — cannot trust auth state
+                return None
+            if not isinstance(parsed, str):
+                # null / number / list / dict in an auth field — cannot trust
+                return None
+            cfg[field] = parsed.strip()
+        return cfg
+    except Exception:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _has_any_auth(auth: dict[str, str]) -> bool:
+    """Return True when at least one auth field is non-empty."""
+    return any(bool(auth.get(k)) for k in _AUTH_FIELDS)
+
+
+def _write_temp_blob(data: bytes, dir_path: Path) -> Path:
+    """Write *data* to a new temp file in *dir_path* and return its Path.
+
+    On any failure the partially-created temp file (if any) is cleaned up
+    before the exception propagates.  The raw fd is always closed.
+    """
+    fd, name = tempfile.mkstemp(prefix=".mimo-auth-", suffix=".tmp", dir=dir_path)
+    fd_owned = fd          # track ownership: -1 once os.fdopen succeeds
+    temp = Path(name)
+    try:
+        fh = os.fdopen(fd, "wb")
+        fd_owned = -1      # fh now owns the fd
+        with fh:
+            fh.write(data)
+    except Exception:
+        if fd_owned >= 0:
+            try:
+                os.close(fd_owned)
+            except OSError:
+                pass
+        temp.unlink(missing_ok=True)
+        raise
+    return temp
 
 
 class DataSyncService:
@@ -282,6 +357,26 @@ class DataSyncService:
                     f"{self.config.branch}:{self.remote_ref}", deadline=deadline
                 )
                 parent = self._git("rev-parse", self.remote_ref, deadline=deadline).decode().strip()
+                # 无条件读取本地和远端认证状态
+                local_auth = _read_auth_fields(self.config.db_path)
+                if local_auth is None:
+                    return SyncResult(SyncStatus.FAILED, "push", "无法读取本地认证配置，拒绝推送")
+                temp_remote: Path | None = None
+                try:
+                    remote_blob = self._git("show", f"{self.remote_ref}:{self.config.git_path}", deadline=deadline)
+                    temp_remote = _write_temp_blob(remote_blob, self.config.data_dir)
+                    remote_auth = _read_auth_fields(temp_remote)
+                except (GitCommandError, OSError):
+                    return SyncResult(SyncStatus.FAILED, "push", "无法读取远端认证配置，拒绝推送以避免覆盖")
+                finally:
+                    if temp_remote is not None:
+                        temp_remote.unlink(missing_ok=True)
+                if remote_auth is None:
+                    return SyncResult(SyncStatus.FAILED, "push", "远端认证配置解析失败，拒绝推送")
+                if not _has_any_auth(local_auth):
+                    if _has_any_auth(remote_auth):
+                        return SyncResult(SyncStatus.SKIPPED, "push", "本地认证信息为空，跳过推送以保护远端配置")
+                    return SyncResult(SyncStatus.FAILED, "push", "本地和远端认证信息均为空，拒绝推送")
                 with self._temporary_index() as index_path:
                     commit = self._build_commit(parent, index_path, deadline)
                 if commit is None:
@@ -344,6 +439,16 @@ class DataSyncService:
             if not valid_sqlite:
                 return SyncResult(SyncStatus.FAILED, "validate_db", "远端数据库校验失败")
             self._ensure_time_remaining(deadline)
+            # 无条件读取远端认证，再检查本地
+            remote_auth = _read_auth_fields(temp_path)
+            if remote_auth is None:
+                return SyncResult(SyncStatus.FAILED, "pull", "远端认证配置解析失败，拒绝覆盖")
+            if self.config.db_path.is_file():
+                local_auth = _read_auth_fields(self.config.db_path)
+                if local_auth is None:
+                    return SyncResult(SyncStatus.FAILED, "pull", "无法读取本地认证配置，拒绝远端覆盖")
+                if _has_any_auth(local_auth) and not _has_any_auth(remote_auth):
+                    return SyncResult(SyncStatus.SKIPPED, "pull", "远端认证信息为空，保留本地有效配置")
             os.replace(temp_path, self.config.db_path)
             temp_path = None
             return SyncResult(SyncStatus.SUCCESS, "pull", "已载入远端悬浮窗设置")
