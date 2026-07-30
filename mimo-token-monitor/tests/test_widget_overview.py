@@ -32,9 +32,14 @@ def _make_widget(**overrides):
         "cookie": "",
         "third_party_api_key": "",
         "third_party_base_url": "http://example.com",
+        "gpt_session_cookie": "",
     }
     cfg.update(overrides)
     w = TokenWidget(cfg)
+    w._timer.stop()
+    w._do_fetch_mimo = lambda: None
+    w._do_fetch_third_party = lambda: None
+    w._do_fetch_gpt = lambda: None
     return w
 
 
@@ -67,10 +72,11 @@ class TestOverviewFetchDispatch(unittest.TestCase):
         calls = []
         w._do_fetch_mimo = lambda: calls.append("mimo")
         w._do_fetch_third_party = lambda: calls.append("third_party")
+        w._do_fetch_gpt = lambda: calls.append("gpt")
 
         w._do_fetch()
 
-        self.assertEqual(calls, ["mimo", "third_party"])
+        self.assertEqual(calls, ["mimo", "third_party", "gpt"])
         w.close()
 
 
@@ -126,8 +132,8 @@ class TestOverviewRowMetrics(unittest.TestCase):
         r1 = TokenWidget._overview_row_metrics(1)
         self.assertEqual(r0[0], r1[0])
         self.assertLess(r0[1], r1[1])
-        self.assertLessEqual(r0[2] + r0[4], r1[1] - 16)
-        self.assertLessEqual(r1[2] + r1[4] + 24, BASE_HEIGHT)
+        self.assertLessEqual(r0[2] + r0[4], r1[1])
+        self.assertLessEqual(r1[2] + r1[4] + 12, BASE_HEIGHT)
 
     def test_bar_width_positive(self):
         _, _, _, bw, bh = TokenWidget._overview_row_metrics(0)
@@ -172,7 +178,7 @@ class TestThirdPartyTooltipLines(unittest.TestCase):
         w = _make_widget(third_party_api_key="k")
         w._tp_data = None
         lines = w._build_third_party_tooltip_lines()
-        self.assertEqual(lines[0], "Usage API")
+        self.assertEqual(lines[0], "WLB")
         self.assertEqual(len(lines), 1)
         w.close()
 
@@ -185,7 +191,7 @@ class TestOverviewTooltipLines(unittest.TestCase):
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
         self.assertIn("Token Plan: \u672a\u914d\u7f6e", joined)
-        self.assertIn("Usage API: \u672a\u914d\u7f6e", joined)
+        self.assertIn("WLB: \u672a\u914d\u7f6e", joined)
         w.close()
 
     def test_mimo_configured_no_data(self):
@@ -211,7 +217,7 @@ class TestOverviewTooltipLines(unittest.TestCase):
                        "is_valid": True, "window": "7d", "total_percent": 100}
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
-        self.assertIn("Usage API: 12.5%", joined)
+        self.assertIn("WLB: 12.5%", joined)
         w.close()
 
     def test_error_included_via_apply(self):
@@ -299,11 +305,16 @@ class TestOverviewRenderSmoke(unittest.TestCase):
 
     def test_overview_render_no_clip(self):
         from PyQt6.QtGui import QImage
-        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake", third_party_api_key="k")
+        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake", third_party_api_key="k", gpt_session_cookie="fake_gpt")
         w._plan_total = 1000
         w._plan_used = 300
         w._tp_data = {"used_percent": 55.0, "remaining_percent": 45.0,
                        "is_valid": True, "window": "7d", "total_percent": 100}
+        w._gpt_data = {"used_percent": 30.0, "remaining_percent": 70.0,
+                       "reset_at": "2026-01-01T00:00:00Z", "source": "test"}
+        w._timer.stop()
+        w._do_fetch = lambda: None
+        w._do_fetch = lambda: None
         w._last_update = "12:00:00"
         img = QImage(w.width(), w.height(), QImage.Format.Format_ARGB32)
         img.fill(0)
@@ -313,12 +324,16 @@ class TestOverviewRenderSmoke(unittest.TestCase):
 
         x0, _, bar_y0, bar_w0, bar_h0 = TokenWidget._overview_row_metrics(0)
         x1, _, bar_y1, bar_w1, bar_h1 = TokenWidget._overview_row_metrics(1)
-        bottom = bar_y1 + bar_h1 + 24
+        x2, _, bar_y2, bar_w2, bar_h2 = TokenWidget._overview_row_metrics(2)
+        bottom = bar_y2 + bar_h2 + 12
         self.assertLessEqual(bottom, w.height())
         self.assertEqual(x0, x1)
+        self.assertEqual(x1, x2)
         self.assertLess(bar_y0, bar_y1)
+        self.assertLess(bar_y1, bar_y2)
         self.assertGreater(img.pixelColor(x0 + bar_w0 // 2, bar_y0 + bar_h0 // 2).alpha(), 0)
         self.assertGreater(img.pixelColor(x1 + bar_w1 // 2, bar_y1 + bar_h1 // 2).alpha(), 0)
+        self.assertGreater(img.pixelColor(x2 + bar_w2 // 2, bar_y2 + bar_h2 // 2).alpha(), 0)
         w.close()
 
 

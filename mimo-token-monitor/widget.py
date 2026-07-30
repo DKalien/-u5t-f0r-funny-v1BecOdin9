@@ -137,12 +137,25 @@ class ThirdPartyFetchWorker(QThread):
         )
         self.finished.emit(result)
 
+# -- GPT weekly usage probe thread --
+class GPTFetchWorker(QThread):
+    finished = pyqtSignal(dict)
+
+    def __init__(self, session_cookie=""):
+        super().__init__()
+        self.session_cookie = session_cookie
+
+    def run(self):
+        result = api_client.fetch_gpt_weekly_usage(self.session_cookie)
+        self.finished.emit(result)
+
+
 # ── Settings dialog ─────────────────────────────────────────────
 class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MiMo Token 设置")
-        self.setFixedSize(500, 440)
+        self.setFixedSize(500, 520)
         self.cfg = dict(cfg)
 
         layout = QFormLayout(self)
@@ -187,19 +200,23 @@ class SettingsDialog(QDialog):
         # third-party usage settings
         self.tp_base_url_edit = QLineEdit(cfg.get("third_party_base_url", "http://codex.wlbclub.com"))
         self.tp_base_url_edit.setPlaceholderText("可填主域名、/v1 或完整 /v1/usage，程序会自动规范")
-        layout.addRow("API Base URL:", self.tp_base_url_edit)
+        layout.addRow("WLB Base URL:", self.tp_base_url_edit)
 
         self.tp_api_key_edit = QLineEdit(cfg.get("third_party_api_key", ""))
         self.tp_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.tp_api_key_edit.setPlaceholderText("来自 CC Switch 的 API Key")
-        layout.addRow("API Key:", self.tp_api_key_edit)
+        layout.addRow("WLB API Key:", self.tp_api_key_edit)
+        self.gpt_session_cookie_edit = QLineEdit(cfg.get("gpt_session_cookie", ""))
+        self.gpt_session_cookie_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.gpt_session_cookie_edit.setPlaceholderText("可选: ChatGPT session-token cookie，用于获取周限额")
+        layout.addRow("GPT Session Cookie:", self.gpt_session_cookie_edit)
 
         hint = QLabel(
             "自动导入: Edge 快捷方式末尾加 --remote-debugging-port=9222 --remote-allow-origins=*，重启浏览器后点击按钮\n"
             "手动导入: F12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n"
             "有效期至: 手动填写套餐到期日期，例如 2026-08-31\n"
             "快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量\n"
-            "API Usage: 填写 Base URL 和 API Key 后可点击标题栏切换图标显示第三方用量\n"
+            "WLB: 填写 Base URL 和 API Key 后可点击标题栏切换图标显示第三方用量\n"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
@@ -248,6 +265,7 @@ class SettingsDialog(QDialog):
         self.cfg["snapshot_path"] = self.snapshot_edit.text().strip()
         self.cfg["third_party_base_url"] = self.tp_base_url_edit.text().strip() or "http://codex.wlbclub.com"
         self.cfg["third_party_api_key"] = self.tp_api_key_edit.text().strip()
+        self.cfg["gpt_session_cookie"] = self.gpt_session_cookie_edit.text().strip()
         return self.cfg
 
 
@@ -262,6 +280,9 @@ class TokenWidget(QWidget):
         self._last_error = ""
         self._mimo_error = ""
         self._tp_error = ""
+        # GPT weekly usage state
+        self._gpt_data = None
+        self._gpt_error = ""
         self._last_update = "等待更新..."
         self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
 
@@ -388,9 +409,9 @@ class TokenWidget(QWidget):
     def _overview_row_metrics(index: int):
         """Return geometry for one compact overview row."""
         row_x = 16
-        label_y = 48 + index * 40
-        bar_y = 56 + index * 40
-        return row_x, label_y, bar_y, 228, 14
+        label_y = 38 + index * 26
+        bar_y = 44 + index * 26
+        return row_x, label_y, bar_y, 228, 8
 
     def _build_mimo_tooltip_lines(self) -> list:
         lines = []
@@ -417,7 +438,7 @@ class TokenWidget(QWidget):
         return lines
 
     def _build_third_party_tooltip_lines(self) -> list:
-        lines = ["Usage API"]
+        lines = ["WLB"]
         if self._tp_data:
             d = self._tp_data
             lines.append(f"剩余: {d.get('remaining_percent', 0):.2f}%")
@@ -434,7 +455,10 @@ class TokenWidget(QWidget):
         lines.append(f"Token Plan: {self._format_overview_percent(mimo_pct, has_cookie)}")
         has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
         tp_pct = self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None
-        lines.append(f"Usage API: {self._format_overview_percent(tp_pct, has_api_key)}")
+        lines.append(f"WLB: {self._format_overview_percent(tp_pct, has_api_key)}")
+        has_gpt = bool(self.cfg.get("gpt_session_cookie", "").strip()) or (isinstance(self._gpt_data, dict) and self._gpt_data.get("used_percent") is not None)
+        gpt_pct = self._gpt_data.get("used_percent") if isinstance(self._gpt_data, dict) else None
+        lines.append(f"GPT \u5468\u9650\u989d: {self._format_overview_percent(gpt_pct, has_gpt)}")
         return lines
 
     def _refresh_error_state(self):
@@ -445,7 +469,7 @@ class TokenWidget(QWidget):
         elif display_mode == THIRD_PARTY_MODE:
             self._last_error = self._tp_error
         else:
-            self._last_error = self._mimo_error or self._tp_error
+            self._last_error = self._mimo_error or self._tp_error or self._gpt_error
 
     def _setup_tray(self):
         """Initialize system tray icon and menu."""
@@ -501,7 +525,7 @@ class TokenWidget(QWidget):
         font_title = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         p.setFont(font_title)
         p.setPen(QPen(TEXT_COLOR))
-        title_text = "总览" if display_mode == OVERVIEW_MODE else ("MiMo Token" if display_mode == MIMO_MODE else "Usage API")
+        title_text = "总览" if display_mode == OVERVIEW_MODE else ("MiMo Token" if display_mode == MIMO_MODE else "WLB")
         p.drawText(16, 22, title_text)
 
         # Mode switch icon right after title
@@ -609,7 +633,7 @@ class TokenWidget(QWidget):
             p.drawText(16, 50, "等待数据...")
 
         # Update time / error (bottom right)
-        status_y = 208 if display_mode == OVERVIEW_MODE else 134
+        status_y = 124 if display_mode == OVERVIEW_MODE else 134
         p.setPen(QPen(DIM))
         font_tiny = QFont("Microsoft YaHei", 7)
         p.setFont(font_tiny)
@@ -822,6 +846,7 @@ class TokenWidget(QWidget):
         """Paint the overview page listing all available data sources."""
         has_cookie = bool(self.cfg.get("cookie", "").strip())
         has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
+        has_gpt = bool(self.cfg.get("gpt_session_cookie", "").strip()) or (isinstance(self._gpt_data, dict) and self._gpt_data.get("used_percent") is not None)
 
         rows = [
             {
@@ -830,9 +855,14 @@ class TokenWidget(QWidget):
                 "percent": (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None,
             },
             {
-                "name": "API",
+                "name": "WLB",
                 "configured": has_api_key,
                 "percent": self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None,
+            },
+            {
+                "name": "GPT \u5468\u9650\u989d",
+                "configured": has_gpt,
+                "percent": self._gpt_data.get("used_percent") if has_gpt and isinstance(self._gpt_data, dict) else None,
             },
         ]
 
@@ -840,7 +870,7 @@ class TokenWidget(QWidget):
             cell_x, label_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
 
             p.setPen(QPen(TEXT_COLOR))
-            label_rect = QRect(cell_x, label_y - 16, bar_w, 18)
+            label_rect = QRect(cell_x, label_y - 14, bar_w, 18)
             p.drawText(
                 label_rect,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -911,7 +941,7 @@ class TokenWidget(QWidget):
             return
         api_key = self.cfg.get("third_party_api_key", "")
         if not api_key:
-            self._tp_error = "请在设置中配置 API Key"
+            self._tp_error = "请在设置中配置 WLB API Key"
             self._tp_data = None
             self._refresh_error_state()
             self._apply_overview_tooltip_if_needed()
@@ -937,6 +967,31 @@ class TokenWidget(QWidget):
         self.update()
 
     # ── Mouse events ────────────────────────────────────────────
+    def _do_fetch_gpt(self):
+        """Dispatch GPT weekly usage fetch."""
+        if self._exit_requested:
+            return
+        if hasattr(self, "_gpt_worker") and self._gpt_worker.isRunning():
+            return
+        session_cookie = self.cfg.get("gpt_session_cookie", "")
+        self._gpt_worker = GPTFetchWorker(session_cookie)
+        self._gpt_worker.finished.connect(self._on_gpt_fetch_done)
+        self._gpt_worker.start()
+
+    def _on_gpt_fetch_done(self, result: dict):
+        """Handle GPT weekly usage fetch result."""
+        if self._exit_requested:
+            return
+        if result.get("ok"):
+            self._gpt_data = result.get("data")
+            self._gpt_error = ""
+        else:
+            self._gpt_error = result.get("error", "GPT \u7528\u91cf\u67e5\u8be2\u5931\u8d25")
+        self._refresh_error_state()
+        self._last_update = datetime.now().strftime("%H:%M:%S")
+        self._apply_overview_tooltip_if_needed()
+        self.update()
+
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             # 检测是否点击显示模式切换图标
@@ -1177,6 +1232,7 @@ class TokenWidget(QWidget):
         if display_mode == OVERVIEW_MODE:
             self._do_fetch_mimo()
             self._do_fetch_third_party()
+            self._do_fetch_gpt()
             return
         if display_mode == THIRD_PARTY_MODE:
             self._do_fetch_third_party()
@@ -1241,7 +1297,9 @@ class TokenWidget(QWidget):
             if self._mimo_error:
                 lines.append(f"Token Plan 错误: {self._mimo_error}")
             if self._tp_error:
-                lines.append(f"Usage API 错误: {self._tp_error}")
+                lines.append(f"WLB 错误: {self._tp_error}")
+            if self._gpt_error:
+                lines.append(f"GPT \u5468\u9650\u989d \u9519\u8bef: {self._gpt_error}")
         elif self._last_error:
             lines.append(f"错误: {self._last_error}")
         tooltip_text = "\n".join(lines)

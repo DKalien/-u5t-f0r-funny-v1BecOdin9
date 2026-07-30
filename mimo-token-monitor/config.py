@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     "always_on_top": True,
     "third_party_base_url": "http://codex.wlbclub.com",
     "third_party_api_key": "",
+    "gpt_session_cookie": "",
     "display_mode": "mimo",
 }
 
