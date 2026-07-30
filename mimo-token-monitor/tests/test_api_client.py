@@ -67,6 +67,27 @@ class TestGPTWeeklyUsageParser(unittest.TestCase):
         self.assertAlmostEqual(result["used_percent"], 75.0)
         self.assertEqual(result["reset_after_seconds"], 3600)
 
+    def test_old_format_weekly_primary_window(self):
+        from api_client import _parse_gpt_secondary_window
+        data = {"rate_limit": {"secondary_window": None, "primary_window": {
+            "used_percent": 30.0,
+            "limit_window_seconds": 604800,
+            "reset_at": 1785923727,
+            "reset_after_seconds": 525327,
+        }}}
+        result = _parse_gpt_secondary_window(data)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["used_percent"], 30.0)
+        self.assertEqual(result["reset_at"], 1785923727)
+
+    def test_old_format_five_hour_primary_is_not_weekly(self):
+        from api_client import _parse_gpt_secondary_window
+        data = {"rate_limit": {"secondary_window": None, "primary_window": {
+            "used_percent": 30.0,
+            "limit_window_seconds": 18000,
+        }}}
+        self.assertIsNone(_parse_gpt_secondary_window(data))
+
     def test_string_percent(self):
         from api_client import _parse_gpt_secondary_window
         data = {"rate_limits": [{"window": "weekly", "used_percent": "33.33"}]}

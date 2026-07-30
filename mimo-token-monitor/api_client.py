@@ -217,6 +217,7 @@ def fetch_third_party_usage(base_url: str, api_key: str, window: str = "7d") -> 
 
 GPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 GPT_AUTH_SESSION_URL = "https://chatgpt.com/api/auth/session"
+GPT_WEEKLY_WINDOW_SECONDS = 7 * 24 * 60 * 60
 
 def _parse_gpt_secondary_window(data):
     """Extract weekly/secondary window fields from a ChatGPT usage response.
@@ -255,11 +256,23 @@ def _parse_gpt_secondary_window(data):
                     secondary = entry
                     break
 
-    # Old format: rate_limit.secondary_window is a dict
+    # Old format: rate_limit.secondary_window is normally the weekly window.
     if secondary is None:
         rl = source.get("rate_limit") if isinstance(source.get("rate_limit"), dict) else None
         if rl and isinstance(rl.get("secondary_window"), dict):
             secondary = rl["secondary_window"]
+
+        # Some current Plus responses put the 7-day window in primary_window
+        # and leave secondary_window null. Do not mistake the usual 5-hour
+        # primary window for a weekly quota.
+        if secondary is None and rl and isinstance(rl.get("primary_window"), dict):
+            primary = rl["primary_window"]
+            try:
+                window_seconds = int(primary.get("limit_window_seconds", 0) or 0)
+            except (TypeError, ValueError):
+                window_seconds = 0
+            if window_seconds == GPT_WEEKLY_WINDOW_SECONDS:
+                secondary = primary
 
     if secondary is None:
         return None
