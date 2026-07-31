@@ -1,5 +1,6 @@
 # encoding: utf-8
 import os, sys, tempfile, unittest, pathlib
+from unittest.mock import Mock, patch
 
 # Ensure mimo-token-monitor package is importable
 _root = pathlib.Path(__file__).resolve().parent.parent
@@ -98,6 +99,33 @@ class TestOverviewFetchDispatch(unittest.TestCase):
         w._do_fetch()
 
         self.assertEqual(calls, ["mimo", "third_party", "gpt"])
+        w.close()
+
+    def test_refresh_attempt_updates_timestamp_before_dispatch(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        calls = []
+        w._do_fetch_mimo = lambda: calls.append(("mimo", w._last_update))
+        w._do_fetch_third_party = lambda: calls.append(("third_party", w._last_update))
+        w._do_fetch_gpt = lambda: calls.append(("gpt", w._last_update))
+
+        with patch("widget.datetime") as fake_datetime:
+            fake_datetime.now.return_value.strftime.return_value = "13:14:15"
+            w._do_fetch()
+
+        self.assertEqual(w._last_update, "13:14:15")
+        self.assertEqual(
+            calls,
+            [
+                ("mimo", "13:14:15"),
+                ("third_party", "13:14:15"),
+                ("gpt", "13:14:15"),
+            ],
+        )
+        w.close()
+
+    def test_configured_refresh_interval_is_applied_to_timer(self):
+        w = _make_widget(refresh_interval=3600)
+        self.assertEqual(w._timer.interval(), 3_600_000)
         w.close()
 
 
@@ -356,6 +384,23 @@ class TestOverviewRenderSmoke(unittest.TestCase):
         self.assertGreater(img.pixelColor(x0 + bar_w0 // 2, bar_y0 + bar_h0 // 2).alpha(), 0)
         self.assertGreater(img.pixelColor(x1 + bar_w1 // 2, bar_y1 + bar_h1 // 2).alpha(), 0)
         self.assertGreater(img.pixelColor(x2 + bar_w2 // 2, bar_y2 + bar_h2 // 2).alpha(), 0)
+        w.close()
+
+    def test_update_time_is_painted_when_overview_has_error(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        w._last_error = "WLB 请求失败"
+        w._last_update = "12:00:00"
+        painter = Mock()
+        metrics = Mock()
+        metrics.horizontalAdvance.return_value = 108
+        metrics.elidedText.return_value = "WLB 请求失败"
+        painter.fontMetrics.return_value = metrics
+
+        w._paint_refresh_status(painter, 136)
+
+        painted_texts = [call.args[-1] for call in painter.drawText.call_args_list]
+        self.assertIn("WLB 请求失败", painted_texts)
+        self.assertIn("更新于 12:00:00", painted_texts)
         w.close()
 
 

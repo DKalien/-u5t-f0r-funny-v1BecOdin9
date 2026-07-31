@@ -634,16 +634,27 @@ class TokenWidget(QWidget):
 
         # Update time / error (bottom right)
         status_y = 136 if display_mode == OVERVIEW_MODE else 134
-        p.setPen(QPen(DIM))
-        font_tiny = QFont("Microsoft YaHei", 7)
-        p.setFont(font_tiny)
-        if self._last_error:
-            p.setPen(QPen(ACCENT_RED))
-            p.drawText(16, status_y, self._last_error[:50])
-        else:
-            p.drawText(180, status_y, f"更新于 {self._last_update}")
+        self._paint_refresh_status(p, status_y)
 
         p.end()
+
+    def _paint_refresh_status(self, p: QPainter, status_y: int):
+        """Paint a persistent update time plus an optional elided error."""
+        font_tiny = QFont("Microsoft YaHei", 7)
+        p.setFont(font_tiny)
+        update_text = f"更新于 {self._last_update}"
+        update_x = max(16, self.width() - 16 - p.fontMetrics().horizontalAdvance(update_text))
+        if self._last_error:
+            p.setPen(QPen(ACCENT_RED))
+            error_width = max(0, update_x - 22)
+            error_text = p.fontMetrics().elidedText(
+                self._last_error,
+                Qt.TextElideMode.ElideRight,
+                error_width,
+            )
+            p.drawText(16, status_y, error_text)
+        p.setPen(QPen(DIM))
+        p.drawText(update_x, status_y, update_text)
 
     def _draw_usage_progress_bar(self, p: QPainter, used_fraction: float):
         """Draw the shared usage progress bar for MiMo and API Usage modes."""
@@ -1228,6 +1239,10 @@ class TokenWidget(QWidget):
     def _do_fetch(self):
         if self._exit_requested:
             return
+        # Record every refresh attempt immediately. Individual completion
+        # callbacks update this again when their request finishes.
+        self._last_update = datetime.now().strftime("%H:%M:%S")
+        self.update()
         display_mode = self.cfg.get("display_mode", MIMO_MODE)
         if display_mode == OVERVIEW_MODE:
             self._do_fetch_mimo()
