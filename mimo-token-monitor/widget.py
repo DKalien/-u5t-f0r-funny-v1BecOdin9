@@ -407,11 +407,11 @@ class TokenWidget(QWidget):
 
     @staticmethod
     def _overview_row_metrics(index: int):
-        """Return geometry for one compact overview row."""
+        """Return geometry for one full-size overview row."""
         row_x = 16
-        label_y = 38 + index * 26
-        bar_y = 44 + index * 26
-        return row_x, label_y, bar_y, 228, 8
+        label_y = 38 + index * 34
+        bar_y = 44 + index * 34
+        return row_x, label_y, bar_y, 228, 14
 
     def _build_mimo_tooltip_lines(self) -> list:
         lines = []
@@ -633,7 +633,7 @@ class TokenWidget(QWidget):
             p.drawText(16, 50, "等待数据...")
 
         # Update time / error (bottom right)
-        status_y = 124 if display_mode == OVERVIEW_MODE else 134
+        status_y = 136 if display_mode == OVERVIEW_MODE else 134
         p.setPen(QPen(DIM))
         font_tiny = QFont("Microsoft YaHei", 7)
         p.setFont(font_tiny)

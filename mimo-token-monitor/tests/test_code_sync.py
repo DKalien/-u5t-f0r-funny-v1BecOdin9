@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from code_sync import CodeSyncConfig, CodeSyncService
 from data_sync import SyncStatus
+from process_utils import hidden_subprocess_kwargs
 
 
 def run_git(cwd: Path, *args: str):
@@ -182,6 +185,83 @@ class TestCodeSync(unittest.TestCase):
             run_git(self.fixture.remote, "rev-parse", "refs/heads/main").stdout,
             run_git(self.fixture.repo, "rev-parse", "HEAD").stdout,
         )
+
+
+class TestHiddenSubprocessKwargs(unittest.TestCase):
+    def test_git_runner_receives_hidden_window_kwargs(self):
+        config = CodeSyncConfig(
+            project_root=Path.cwd(),
+            repo_root=Path.cwd().parent,
+            project_path="mimo-token-monitor",
+            timeout_seconds=5,
+        )
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"ok", stderr=b"",
+        )
+        runner = Mock(return_value=completed)
+        service = CodeSyncService(config, runner=runner)
+
+        service._git("status")
+
+        runner.assert_called_once()
+        _, kwargs = runner.call_args
+        expected = hidden_subprocess_kwargs()
+        if sys.platform == "win32":
+            self.assertEqual(
+                kwargs.get("creationflags"), subprocess.CREATE_NO_WINDOW,
+            )
+            self.assertIsInstance(
+                kwargs.get("startupinfo"), subprocess.STARTUPINFO,
+            )
+            self.assertTrue(
+                kwargs["startupinfo"].dwFlags
+                & subprocess.STARTF_USESHOWWINDOW,
+            )
+            self.assertEqual(
+                kwargs["startupinfo"].wShowWindow,
+                subprocess.SW_HIDE,
+            )
+        else:
+            self.assertNotIn("creationflags", kwargs)
+            self.assertNotIn("startupinfo", kwargs)
+            self.assertEqual(expected, {})
+
+
+class TestProcessUtilsHiddenSubprocessKwargs(unittest.TestCase):
+    def test_windows_calls_return_distinct_startupinfo(self):
+        if sys.platform != "win32":
+            self.skipTest("仅在 Windows 下验证 STARTUPINFO")
+
+        first = hidden_subprocess_kwargs()
+        second = hidden_subprocess_kwargs()
+
+        self.assertNotEqual(first, second)
+        self.assertIsNot(first["startupinfo"], second["startupinfo"])
+        self.assertEqual(
+            first["creationflags"], subprocess.CREATE_NO_WINDOW,
+        )
+        self.assertEqual(
+            second["creationflags"], subprocess.CREATE_NO_WINDOW,
+        )
+        self.assertTrue(
+            first["startupinfo"].dwFlags & subprocess.STARTF_USESHOWWINDOW,
+        )
+        self.assertEqual(
+            first["startupinfo"].wShowWindow, subprocess.SW_HIDE,
+        )
+        self.assertTrue(
+            second["startupinfo"].dwFlags & subprocess.STARTF_USESHOWWINDOW,
+        )
+        self.assertEqual(
+            second["startupinfo"].wShowWindow, subprocess.SW_HIDE,
+        )
+
+    def test_patched_linux_returns_empty_mapping(self):
+        with patch("process_utils.sys.platform", "linux"):
+            result = hidden_subprocess_kwargs()
+
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result, {})
 
 
 if __name__ == "__main__":

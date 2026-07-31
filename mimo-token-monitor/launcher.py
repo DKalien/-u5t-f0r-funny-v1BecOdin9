@@ -15,10 +15,10 @@ from code_sync import (
     encode_sync_result,
     run_startup_code_sync,
 )
+from process_utils import hidden_subprocess_kwargs
 
 
 APP_NAME = "MiMo Token Monitor"
-CREATE_NO_WINDOW = 0x08000000
 
 
 def show_error(message: str) -> None:
@@ -78,8 +78,8 @@ def start_monitor(
     subprocess.Popen(
         [*command, str(project_root / "main.py")],
         cwd=project_root,
-        creationflags=CREATE_NO_WINDOW,
         env=child_env,
+        **hidden_subprocess_kwargs(),
     )
 
 

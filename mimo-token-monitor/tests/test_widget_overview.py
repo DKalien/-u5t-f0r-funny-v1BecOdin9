@@ -148,18 +148,19 @@ class TestOverviewPercentFormat(unittest.TestCase):
 class TestOverviewRowMetrics(unittest.TestCase):
     """Overview rows stack vertically and fit inside the compact window."""
 
-    def test_two_rows_stack_without_overlap(self):
-        r0 = TokenWidget._overview_row_metrics(0)
-        r1 = TokenWidget._overview_row_metrics(1)
-        self.assertEqual(r0[0], r1[0])
-        self.assertLess(r0[1], r1[1])
-        self.assertLessEqual(r0[2] + r0[4], r1[1])
-        self.assertLessEqual(r1[2] + r1[4] + 12, BASE_HEIGHT)
+    def test_three_rows_stack_without_overlap(self):
+        rows = [TokenWidget._overview_row_metrics(index) for index in range(3)]
+        self.assertEqual([row[0] for row in rows], [16, 16, 16])
+        for previous, current in zip(rows, rows[1:]):
+            previous_bar_bottom = previous[2] + previous[4]
+            current_label_top = current[1] - 14
+            self.assertLessEqual(previous_bar_bottom, current_label_top)
+        self.assertLessEqual(rows[-1][2] + rows[-1][4] + 10, BASE_HEIGHT)
 
-    def test_bar_width_positive(self):
-        _, _, _, bw, bh = TokenWidget._overview_row_metrics(0)
-        self.assertGreater(bw, 0)
-        self.assertGreater(bh, 0)
+    def test_bars_match_token_plan_size(self):
+        for index in range(3):
+            _, _, _, bar_width, bar_height = TokenWidget._overview_row_metrics(index)
+            self.assertEqual((bar_width, bar_height), (228, 14))
 
 
 class TestMimoTooltipLines(unittest.TestCase):

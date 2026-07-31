@@ -14,6 +14,7 @@ import time
 from typing import Callable
 
 from config import _db_path, _project_data_dir
+from process_utils import hidden_subprocess_kwargs
 
 _ALLOWED_GIT_PATH = "mimo-token-monitor/settings.db"
 _COMMIT_MESSAGE = "chore(mimo-token-monitor): 同步悬浮窗设置"
@@ -232,6 +233,7 @@ class DataSyncService:
                 timeout=max(0.001, remaining),
                 check=False,
                 env=env,
+                **hidden_subprocess_kwargs(),
             )
         except subprocess.TimeoutExpired as exc:
             raise GitCommandError("Git 命令超时", str(exc)) from exc

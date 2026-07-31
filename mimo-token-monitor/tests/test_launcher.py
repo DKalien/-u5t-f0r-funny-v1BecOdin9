@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 import unittest
@@ -5,6 +7,7 @@ import unittest
 from code_sync import CODE_SYNC_RESULT_ENV
 from data_sync import SyncResult, SyncStatus
 from launcher import main, start_monitor
+from process_utils import hidden_subprocess_kwargs
 
 
 class TestLauncher(unittest.TestCase):
@@ -15,8 +18,28 @@ class TestLauncher(unittest.TestCase):
             start_monitor(["python.exe"], project_root, result)
 
         kwargs = popen.call_args.kwargs
-        self.assertEqual(kwargs["cwd"], project_root)
-        self.assertEqual(kwargs["creationflags"], 0x08000000)
+        expected_hidden = hidden_subprocess_kwargs()
+        self.assertEqual(kwargs.get("cwd"), project_root)
+        if sys.platform == "win32":
+            self.assertEqual(
+                kwargs.get("creationflags"),
+                subprocess.CREATE_NO_WINDOW,
+            )
+            self.assertIsInstance(
+                kwargs.get("startupinfo"), subprocess.STARTUPINFO,
+            )
+            self.assertTrue(
+                kwargs["startupinfo"].dwFlags
+                & subprocess.STARTF_USESHOWWINDOW,
+            )
+            self.assertEqual(
+                kwargs["startupinfo"].wShowWindow,
+                subprocess.SW_HIDE,
+            )
+        else:
+            self.assertNotIn("creationflags", kwargs)
+            self.assertNotIn("startupinfo", kwargs)
+            self.assertEqual(expected_hidden, {})
         self.assertIn(CODE_SYNC_RESULT_ENV, kwargs["env"])
         self.assertIn("代码已更新", kwargs["env"][CODE_SYNC_RESULT_ENV])
 

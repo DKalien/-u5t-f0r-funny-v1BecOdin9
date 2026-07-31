@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -15,6 +16,7 @@ from data_sync import (
     _read_auth_fields,
     _sanitize_detail,
 )
+from process_utils import hidden_subprocess_kwargs
 
 
 class TestSyncConfig(unittest.TestCase):
@@ -878,3 +880,48 @@ class TestAuthFailureGuard(unittest.TestCase):
         result = DataSyncService(self.fixture.config()).pull_remote_database()
         self.assertEqual(result.status, SyncStatus.FAILED)
         self.assertIn("认证", result.message)
+
+
+class TestHiddenSubprocessKwargs(unittest.TestCase):
+    def test_data_sync_git_runner_receives_hidden_window_kwargs(self):
+        with tempfile.TemporaryDirectory(prefix="mimo_hidden_") as tmp:
+            config = SyncConfig(
+                repo_root=Path(tmp).resolve(),
+                data_dir=(Path(tmp) / "mimo-token-monitor").resolve(),
+                db_path=(Path(tmp) / "mimo-token-monitor" / "settings.db").resolve(),
+                timeout_seconds=5,
+            )
+            completed = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=b"ok", stderr=b"",
+            )
+            runner = Mock(return_value=completed)
+            service = DataSyncService(config, runner=runner)
+
+            service._git("status")
+
+            runner.assert_called_once()
+            _, kwargs = runner.call_args
+            expected = hidden_subprocess_kwargs()
+            if sys.platform == "win32":
+                self.assertEqual(
+                    kwargs.get("creationflags"), subprocess.CREATE_NO_WINDOW,
+                )
+                self.assertIsInstance(
+                    kwargs.get("startupinfo"), subprocess.STARTUPINFO,
+                )
+                self.assertTrue(
+                    kwargs["startupinfo"].dwFlags
+                    & subprocess.STARTF_USESHOWWINDOW,
+                )
+                self.assertEqual(
+                    kwargs["startupinfo"].wShowWindow,
+                    subprocess.SW_HIDE,
+                )
+            else:
+                self.assertNotIn("creationflags", kwargs)
+                self.assertNotIn("startupinfo", kwargs)
+                self.assertEqual(expected, {})
+
+
+if __name__ == "__main__":
+    unittest.main()

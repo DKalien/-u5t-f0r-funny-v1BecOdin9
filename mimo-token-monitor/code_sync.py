@@ -17,6 +17,7 @@ import time
 from typing import Callable
 
 from data_sync import GitCommandError, SyncResult, SyncStatus, sanitize_detail
+from process_utils import hidden_subprocess_kwargs
 
 _DEFAULT_PROJECT_PATH = "mimo-token-monitor"
 _CODE_COMMIT_MESSAGE = "chore(mimo-token-monitor): 同步代码更新"
@@ -149,6 +150,7 @@ class CodeSyncService:
                 timeout=max(0.001, remaining),
                 check=False,
                 env=env,
+                **hidden_subprocess_kwargs(),
             )
         except subprocess.TimeoutExpired as exc:
             raise GitCommandError("Git 命令超时", str(exc)) from exc
