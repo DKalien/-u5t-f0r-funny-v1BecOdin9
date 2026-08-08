@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to coding agents when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) and other coding agents when working with code in this repository.
 
 ## 项目概述
 
@@ -36,7 +36,7 @@ Python 模块采用单目录扁平结构：
 - **snapshot_writer.py** — 快照写入。为 claude-hud 生成用量快照 JSON 文件，包含余额、用量、今日用量等信息。
 - **data_sync.py** — 以 Git plumbing、临时 index 和 SQLite 校验同步唯一目标 `mimo-token-monitor/settings.db`，不得操作共享仓库其他路径。
 - **code_sync.py** — 检查并同步代码项目 `mimo-token-monitor/`；启动只允许干净工作区快进，退出只提交该项目目录。
-- **sync_runtime.py** — 用 QThread 编排数据库与代码的真正退出推送，保证 Git 网络操作不阻塞 Qt 主线程。
+- **sync_runtime.py** — 用 QThread 编排启动拉取与真正退出推送，保证 Git 网络操作不阻塞 Qt 主线程。
 
 数据流：`launcher.py` → `code_sync.py` 检查并快进拉取代码 → 启动 `main.py` → `data_sync.py` 在窗口显示前拉取设置 → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制；直接运行 `main.py` 时会执行代码同步兜底；真正退出时由 `sync_runtime.py` 在后台依次推送设置和代码。
 
