@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -149,6 +150,172 @@ class TestGitBoundary(unittest.TestCase):
         self.assertIn("ordinary-diagnostic", clean)
         self.assertIn("https://***:***@example.test/b", clean)
 
-    def test_non_sensitive_diagnostic_is_preserved(self):
-        detail = "fatal: repository unavailable; hint: check ordinary value"
+    def test_sensitive_naked_credentials_and_any_scheme_urls_are_redacted(self):
+        detail = (
+            "token=abc access_token: def remote token ghi "
+            "password=jkl passwd=mno api_key: pqr apikey=stu "
+            "secret=vwx credential: yz auth=tokenvalue "
+            "ssh://user:password@host/path "
+            "ftp://ftpuser:ftppass@example.test/file "
+            "http://httpuser:httppass@example.test/path ordinary-diagnostic"
+        )
+        clean = _sanitize_detail(detail)
+        for sensitive in (
+            "abc", "def", "ghi", "jkl", "mno", "pqr", "stu", "vwx", "yz",
+            "tokenvalue", "user", "ftpuser", "ftppass",
+            "httpuser", "httppass",
+        ):
+            self.assertNotIn(sensitive, clean)
+        self.assertIn("remote token ***", clean)
+        self.assertIn("ssh://***:***@host/path", clean)
+        self.assertIn("ftp://***:***@example.test/file", clean)
+        self.assertIn("ordinary-diagnostic", clean)
+
+    def test_common_diagnostic_phrases_are_preserved(self):
+        detail = "token usage; password expired; auth failed"
         self.assertEqual(_sanitize_detail(detail), detail)
+
+
+class TestRelativeRepositoryRoot(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mimo_relative_git_", dir=Path.cwd())
+        self.repo = Path(self.tmp.name) / "data"
+        self.data_dir = self.repo / "mimo-token-monitor"
+        self.data_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _config_with_relative_root(self):
+        relative_root = Path(os.path.relpath(self.repo, Path.cwd()))
+        return SyncConfig(
+            repo_root=relative_root,
+            data_dir=self.data_dir,
+            db_path=self.data_dir / "settings.db",
+        )
+
+    def test_relative_repo_root_matches_resolved_git_root(self):
+        config = self._config_with_relative_root()
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f"{self.repo.resolve()}\n".encode(), stderr=b""
+        ))
+        self.assertIsNone(DataSyncService(config, runner=runner).validate_repository())
+
+    def test_git_uses_resolved_repository_root(self):
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"ok", stderr=b""
+        ))
+        service = DataSyncService(self._config_with_relative_root(), runner=runner)
+        service._git("status")
+        self.assertEqual(runner.call_args.args[0][2], str(service.config.repo_root.resolve()))
+
+
+def run_git(cwd: Path, *args: str, input_bytes: bytes | None = None):
+    return subprocess.run(
+        ["git", "-C", str(cwd), *args], input=input_bytes,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+
+
+def write_db(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    try:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        conn.execute("INSERT INTO settings VALUES ('cookie', ?)", (f'"{value}"',))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def read_cookie(path: Path) -> str:
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute("SELECT value_json FROM settings WHERE key='cookie'").fetchone()[0]
+    finally:
+        conn.close()
+
+
+class GitRepoFixture:
+    def __init__(self, root: Path):
+        self.remote = root / "remote.git"
+        self.repo = root / "data"
+        subprocess.run(["git", "init", "--bare", str(self.remote)], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run(["git", "init", "-b", "main", str(self.repo)], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        run_git(self.repo, "config", "user.name", "MiMo Test")
+        run_git(self.repo, "config", "user.email", "mimo@example.test")
+        run_git(self.repo, "remote", "add", "origin", str(self.remote))
+        write_db(self.repo / "mimo-token-monitor" / "settings.db", "remote-v1")
+        other = self.repo / "financial-data-backup" / "keep.txt"
+        other.parent.mkdir(parents=True)
+        other.write_text("keep-v1", encoding="utf-8")
+        run_git(self.repo, "add", ".")
+        run_git(self.repo, "commit", "-m", "seed")
+        run_git(self.repo, "push", "-u", "origin", "main")
+
+    def config(self) -> SyncConfig:
+        data_dir = self.repo / "mimo-token-monitor"
+        return SyncConfig(
+            repo_root=self.repo.resolve(), data_dir=data_dir.resolve(),
+            db_path=(data_dir / "settings.db").resolve(), timeout_seconds=10,
+        )
+
+
+class TestPullRemoteDatabase(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mimo_pull_")
+        self.fixture = GitRepoFixture(Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_remote_valid_database_overwrites_local_atomically(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local")
+        result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.SUCCESS)
+        self.assertEqual(read_cookie(db), '"remote-v1"')
+        self.assertEqual(list(db.parent.glob(".mimo-settings-*.tmp")), [])
+
+    def test_invalid_remote_database_preserves_local(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local")
+        invalid = self.fixture.repo / "invalid.db"
+        invalid.write_bytes(b"not sqlite")
+        blob = run_git(self.fixture.repo, "hash-object", "-w", str(invalid)).stdout.strip().decode()
+        run_git(self.fixture.repo, "update-index", "--cacheinfo", "100644", blob,
+                "mimo-token-monitor/settings.db")
+        run_git(self.fixture.repo, "commit", "-m", "invalid remote")
+        run_git(self.fixture.repo, "push", "origin", "main")
+        result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(read_cookie(db), '"local"')
+        self.assertEqual(list(db.parent.glob(".mimo-settings-*.tmp")), [])
+
+    def test_fdopen_failure_closes_untransferred_descriptor_and_preserves_local(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local")
+        real_close = os.close
+        with patch("data_sync.os.fdopen", side_effect=OSError("fdopen failed")) as fdopen:
+            with patch("data_sync.os.close", side_effect=real_close) as close:
+                result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(read_cookie(db), '"local"')
+        fdopen.assert_called_once()
+        close.assert_called_once_with(fdopen.call_args.args[0])
+
+    def test_cleanup_failure_does_not_mask_failed_result(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local")
+        with patch.object(DataSyncService, "_validate_sqlite", return_value=False):
+            with patch.object(Path, "unlink", side_effect=OSError("cleanup failed")):
+                result = DataSyncService(self.fixture.config()).pull_remote_database()
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertEqual(result.stage, "validate_db")
+        self.assertEqual(read_cookie(db), '"local"')
