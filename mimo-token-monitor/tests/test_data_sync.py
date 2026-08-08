@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from data_sync import DataSyncService, SyncConfig, SyncStatus
+from data_sync import DataSyncService, GitCommandError, SyncConfig, SyncStatus, _sanitize_detail
 
 
 class TestSyncConfig(unittest.TestCase):
@@ -78,3 +79,76 @@ class TestSyncConfig(unittest.TestCase):
         )
         result = DataSyncService(config).validate_paths()
         self.assertEqual(result.status, SyncStatus.SKIPPED)
+
+    def test_other_database_file_in_data_directory_is_rejected(self):
+        config = SyncConfig(
+            repo_root=self.repo.resolve(),
+            data_dir=self.data_dir.resolve(),
+            db_path=(self.data_dir / "other.db").resolve(),
+        )
+        result = DataSyncService(config).validate_paths()
+        self.assertEqual(result.status, SyncStatus.SKIPPED)
+        self.assertEqual(result.stage, "validate")
+
+
+class TestGitBoundary(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="mimo_git_")
+        self.repo = Path(self.tmp.name) / "data"
+        self.data_dir = self.repo / "mimo-token-monitor"
+        self.data_dir.mkdir(parents=True)
+        self.config = SyncConfig(
+            repo_root=self.repo.resolve(),
+            data_dir=self.data_dir.resolve(),
+            db_path=(self.data_dir / "settings.db").resolve(),
+        )
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_repository_root_mismatch_is_skipped(self):
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"C:/wrong/repo\n", stderr=b""
+        ))
+        result = DataSyncService(self.config, runner=runner).validate_repository()
+        self.assertEqual(result.status, SyncStatus.SKIPPED)
+        self.assertEqual(result.stage, "validate")
+
+    def test_git_timeout_becomes_command_error(self):
+        runner = Mock(side_effect=subprocess.TimeoutExpired(["git"], 30))
+        service = DataSyncService(self.config, runner=runner)
+        with self.assertRaisesRegex(GitCommandError, "超时"):
+            service._git("status")
+
+    def test_sensitive_url_is_redacted_and_truncated(self):
+        detail = "x" * 2100 + " https://alice:secret@example.test/path?token=abc"
+        clean = _sanitize_detail(detail)
+        self.assertLessEqual(len(clean), 2000)
+        self.assertNotIn("alice", clean)
+        self.assertNotIn("secret", clean)
+        self.assertNotIn("abc", clean)
+
+    def test_sensitive_diagnostic_forms_are_redacted(self):
+        detail = (
+            "https://urluser@example.test/a "
+            "https://urlname:urlpass@example.test/b "
+            "?token=tokenvalue&access_token=accessvalue#password=passwordvalue "
+            "?passwd=passwdvalue&api_key=keyvalue&apikey=apikeyvalue "
+            "#secret=secretvalue&credential=credentialvalue&auth=authvalue "
+            "Authorization: Bearer headerbearer "
+            "Bearer standalonebearer ordinary-diagnostic"
+        )
+        clean = _sanitize_detail(detail)
+        for sensitive in (
+            "urluser", "urlname", "urlpass", "tokenvalue", "accessvalue",
+            "passwordvalue", "passwdvalue", "keyvalue", "apikeyvalue",
+            "secretvalue", "credentialvalue", "authvalue", "headerbearer",
+            "standalonebearer",
+        ):
+            self.assertNotIn(sensitive, clean)
+        self.assertIn("ordinary-diagnostic", clean)
+        self.assertIn("https://***:***@example.test/b", clean)
+
+    def test_non_sensitive_diagnostic_is_preserved(self):
+        detail = "fatal: repository unavailable; hint: check ordinary value"
+        self.assertEqual(_sanitize_detail(detail), detail)

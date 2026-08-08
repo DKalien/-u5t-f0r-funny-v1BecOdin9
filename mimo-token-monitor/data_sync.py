@@ -4,10 +4,37 @@ from dataclasses import dataclass
 from enum import Enum
 import os
 from pathlib import Path, PurePosixPath
+import re
+import subprocess
+from typing import Callable
 
 from config import _db_path, _project_data_dir
 
 _ALLOWED_GIT_PATH = "mimo-token-monitor/settings.db"
+
+
+class GitCommandError(RuntimeError):
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = _sanitize_detail(detail)
+
+
+def _sanitize_detail(detail: str) -> str:
+    clean = re.sub(r"https?://[^\s/@:]+:[^\s/@]+@", "https://***:***@", detail)
+    clean = re.sub(r"https?://[^\s/@:]+@", "https://***@", clean)
+    clean = re.sub(
+        r"([?#&](?:token|access_token|password|passwd|api_key|apikey|secret|credential|auth)=)[^&#\s]+",
+        r"\1***",
+        clean,
+        flags=re.I,
+    )
+    clean = re.sub(
+        r"(Authorization:\s*Bearer\s+|(?<![\w])Bearer\s+)[^\s,;]+",
+        r"\1***",
+        clean,
+        flags=re.I,
+    )
+    return clean[-2000:]
 
 
 class SyncStatus(str, Enum):
@@ -75,8 +102,48 @@ def _positive_int(name: str, default: int) -> int:
 
 
 class DataSyncService:
-    def __init__(self, config: SyncConfig):
+    def __init__(
+        self,
+        config: SyncConfig,
+        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    ):
         self.config = config
+        self._runner = runner
+
+    def _git(self, *args: str, input_bytes: bytes | None = None, env: dict | None = None) -> bytes:
+        command = ["git", "-C", str(self.config.repo_root), *args]
+        try:
+            completed = self._runner(
+                command,
+                input=input_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=self.config.timeout_seconds,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GitCommandError("Git 命令超时", str(exc)) from exc
+        except OSError as exc:
+            raise GitCommandError("无法启动 Git", str(exc)) from exc
+        if completed.returncode != 0:
+            detail = completed.stderr.decode("utf-8", errors="replace")
+            raise GitCommandError("Git 命令执行失败", detail)
+        return completed.stdout
+
+    def validate_repository(self) -> SyncResult | None:
+        invalid = self.validate_paths()
+        if invalid is not None:
+            return invalid
+        try:
+            actual = Path(
+                self._git("rev-parse", "--show-toplevel").decode("utf-8").strip()
+            ).resolve()
+        except GitCommandError as exc:
+            return SyncResult(SyncStatus.SKIPPED, "validate", str(exc), exc.detail)
+        if actual != self.config.repo_root:
+            return SyncResult(SyncStatus.SKIPPED, "validate", "Git 仓库根目录不匹配")
+        return None
 
     def validate_paths(self) -> SyncResult | None:
         cfg = self.config
@@ -88,6 +155,8 @@ class DataSyncService:
         db_path = cfg.db_path.resolve()
         if db_path.parent != data_dir:
             return SyncResult(SyncStatus.SKIPPED, "validate", "数据库不在指定数据目录")
+        if db_path != data_dir / "settings.db":
+            return SyncResult(SyncStatus.SKIPPED, "validate", "数据库路径不是允许的 settings.db")
         if data_dir.parent != repo_root:
             return SyncResult(SyncStatus.SKIPPED, "validate", "数据目录与仓库根目录不匹配")
         return None
