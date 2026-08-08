@@ -1146,13 +1146,8 @@ class TokenWidget(QWidget):
 
     def show_sync_result(self, result):
         """Show a non-blocking tray notification for a sync result."""
-        title = {
-            "code_pull": "MiMo 代码仓库同步",
-            "code_push": "MiMo 代码仓库同步",
-            "startup": "MiMo 启动同步",
-        }.get(result.stage, "MiMo 设置同步")
         self._tray_icon.showMessage(
-            title,
+            "MiMo 设置同步",
             result.message,
             QSystemTrayIcon.MessageIcon.Warning,
             5000,
@@ -1163,8 +1158,6 @@ class TokenWidget(QWidget):
         if self._exit_requested:
             return
         self._exit_requested = True
-        self.setEnabled(False)
-        self._timer.stop()
         if self._exit_callback is not None:
             self._exit_callback()
         else:

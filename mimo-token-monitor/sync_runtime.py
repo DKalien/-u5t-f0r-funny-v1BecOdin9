@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 
 from PyQt6.QtCore import QObject, QEventLoop, QThread, pyqtSignal
 
@@ -28,25 +28,15 @@ class SyncWorker(QThread):
 
 
 class ExitSyncController(QObject):
-    """Run final database/code pushes once before quitting the application."""
+    """Run the final database push once before quitting the application."""
 
     finished = pyqtSignal(object)
 
-    def __init__(
-        self,
-        service,
-        quit_callback,
-        notify_callback,
-        parent=None,
-        additional_operations: Iterable[Callable[[], SyncResult]] = (),
-    ):
+    def __init__(self, service, quit_callback, notify_callback, parent=None):
         super().__init__(parent if isinstance(parent, QObject) else None)
+        self.service = service
         self.quit_callback = quit_callback
         self.notify_callback = notify_callback
-        self.operations = []
-        if service is not None:
-            self.operations.append(service.push_local_database)
-        self.operations.extend(additional_operations)
         self._worker = None
         self._exiting = False
 
@@ -54,38 +44,19 @@ class ExitSyncController(QObject):
         if self._exiting:
             return
         self._exiting = True
-        if not self.operations:
+        if self.service is None:
             self.quit_callback()
             return
 
-        self._worker = SyncWorker(self._run_operations, self)
+        self._worker = SyncWorker(self.service.push_local_database, self)
         self._worker.completed.connect(self._complete)
         self._worker.start()
 
-    def _run_operations(self):
-        results = []
-        for operation in self.operations:
-            try:
-                results.append(operation())
-            except Exception as exc:
-                results.append(
-                    SyncResult(
-                        SyncStatus.FAILED,
-                        "runtime",
-                        "同步线程异常",
-                        sanitize_detail(str(exc)),
-                    )
-                )
-        return results
-
     def _complete(self, result: SyncResult):
         try:
-            results = result if isinstance(result, (list, tuple)) else [result]
-            for item in results:
-                if item.status not in {SyncStatus.FAILED, SyncStatus.SKIPPED}:
-                    continue
+            if result.status in {SyncStatus.FAILED, SyncStatus.SKIPPED}:
                 try:
-                    self.notify_callback(item)
+                    self.notify_callback(result)
                 except Exception:
                     pass
             self.finished.emit(result)
