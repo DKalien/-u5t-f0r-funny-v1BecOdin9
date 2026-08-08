@@ -234,6 +234,13 @@ class DataSyncService:
             env=env,
         ).decode().strip()
 
+    def _is_non_fast_forward(self, exc: GitCommandError) -> bool:
+        detail = exc.detail.lower()
+        return "non-fast-forward" in detail or "fetch first" in detail
+
+    def _before_push(self, attempt: int) -> None:
+        pass
+
     def push_local_database(self) -> SyncResult:
         invalid = self.validate_repository()
         if invalid is not None:
@@ -241,21 +248,35 @@ class DataSyncService:
         if not self.config.db_path.is_file() or not self._validate_sqlite(self.config.db_path):
             return SyncResult(SyncStatus.FAILED, "validate_db", "本地数据库不存在或校验失败")
         try:
-            self._git(
-                "fetch", self.config.remote,
-                f"{self.config.branch}:{self.remote_ref}",
-            )
-            parent = self._git("rev-parse", self.remote_ref).decode().strip()
-            with self._temporary_index() as index_path:
-                commit = self._build_commit(parent, index_path)
-            if commit is None:
-                return SyncResult(SyncStatus.NO_CHANGE, "push", "设置没有变化，无需推送")
-            self._git(
-                "push", self.config.remote,
-                f"{commit}:refs/heads/{self.config.branch}",
-            )
-            self._git("update-ref", self.remote_ref, commit)
-            return SyncResult(SyncStatus.SUCCESS, "push", "已同步本地悬浮窗设置")
+            for attempt in range(1, self.config.push_retries + 1):
+                self._git(
+                    "fetch", self.config.remote,
+                    f"{self.config.branch}:{self.remote_ref}",
+                )
+                parent = self._git("rev-parse", self.remote_ref).decode().strip()
+                with self._temporary_index() as index_path:
+                    commit = self._build_commit(parent, index_path)
+                if commit is None:
+                    return SyncResult(SyncStatus.NO_CHANGE, "push", "设置没有变化，无需推送")
+                self._before_push(attempt)
+                try:
+                    self._git(
+                        "push", self.config.remote,
+                        f"{commit}:refs/heads/{self.config.branch}",
+                    )
+                except GitCommandError as exc:
+                    if self._is_non_fast_forward(exc):
+                        if attempt < self.config.push_retries:
+                            continue
+                        return SyncResult(
+                            SyncStatus.FAILED,
+                            "push",
+                            "远端持续更新，已达到重试上限",
+                            exc.detail,
+                        )
+                    raise
+                self._git("update-ref", self.remote_ref, commit)
+                return SyncResult(SyncStatus.SUCCESS, "push", "已同步本地悬浮窗设置")
         except (GitCommandError, OSError) as exc:
             detail = exc.detail if isinstance(exc, GitCommandError) else _sanitize_detail(str(exc))
             return SyncResult(SyncStatus.FAILED, "push", str(exc), detail)

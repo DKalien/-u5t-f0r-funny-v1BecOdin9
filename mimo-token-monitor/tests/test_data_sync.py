@@ -175,6 +175,13 @@ class TestGitBoundary(unittest.TestCase):
         detail = "token usage; password expired; auth failed"
         self.assertEqual(_sanitize_detail(detail), detail)
 
+    def test_non_fast_forward_detection_requires_competition_signal(self):
+        service = DataSyncService(self.config)
+        self.assertFalse(service._is_non_fast_forward(GitCommandError("failed", "[rejected] main -> main (protected branch hook declined)")))
+        self.assertFalse(service._is_non_fast_forward(GitCommandError("failed", "remote rejected: permission denied")))
+        self.assertTrue(service._is_non_fast_forward(GitCommandError("failed", "[rejected] main -> main (non-fast-forward)")))
+        self.assertTrue(service._is_non_fast_forward(GitCommandError("failed", "hint: fetch first")))
+
 
 class TestRelativeRepositoryRoot(unittest.TestCase):
     def setUp(self):
@@ -236,6 +243,17 @@ def read_cookie(path: Path) -> str:
         conn.close()
 
 
+def read_cookie_from_git(repo: Path, path: str) -> str:
+    blob = run_git(repo, "show", f"refs/heads/main:{path}").stdout
+    temp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    try:
+        temp.write(blob)
+        temp.close()
+        return read_cookie(Path(temp.name))
+    finally:
+        Path(temp.name).unlink(missing_ok=True)
+
+
 class GitRepoFixture:
     def __init__(self, root: Path):
         self.remote = root / "remote.git"
@@ -265,6 +283,37 @@ class GitRepoFixture:
 
 
 
+class RacingSyncService(DataSyncService):
+    def __init__(self, config: SyncConfig, competing_clone: Path):
+        super().__init__(config)
+        self.competing_clone = competing_clone
+        self.injected = False
+
+    def _before_push(self, attempt: int) -> None:
+        if self.injected:
+            return
+        self.injected = True
+        other = self.competing_clone / "financial-data-backup" / "remote.txt"
+        other.parent.mkdir(parents=True, exist_ok=True)
+        other.write_text("remote-latest", encoding="utf-8")
+        run_git(self.competing_clone, "add", ".")
+        run_git(self.competing_clone, "commit", "-m", "concurrent other data")
+        run_git(self.competing_clone, "push", "origin", "main")
+
+
+class NonCompetitiveFailureService(DataSyncService):
+    def __init__(self, config: SyncConfig, detail: str = "remote: authentication required"):
+        super().__init__(config)
+        self.detail = detail
+        self.push_attempts = 0
+
+    def _git(self, *args: str, **kwargs):
+        if args and args[0] == "push":
+            self.push_attempts += 1
+            raise GitCommandError("Git 命令执行失败", self.detail)
+        return super()._git(*args, **kwargs)
+
+
 class TestPushLocalDatabase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="mimo_push_")
@@ -273,7 +322,70 @@ class TestPushLocalDatabase(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_push_changes_only_target_and_preserves_other_worktree_changes(self):
+    def test_push_rebuilds_on_remote_race_and_preserves_remote_other_path(self):
+        clone = Path(self.tmp.name) / "competing"
+        subprocess.run(
+            ["git", "clone", "-b", "main", str(self.fixture.remote), str(clone)],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        run_git(clone, "config", "user.name", "Competitor")
+        run_git(clone, "config", "user.email", "competitor@example.test")
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local-exit")
+
+        result = RacingSyncService(self.fixture.config(), clone).push_local_database()
+
+        self.assertEqual(result.status, SyncStatus.SUCCESS)
+        verify = Path(self.tmp.name) / "verify"
+        subprocess.run(
+            ["git", "clone", "-b", "main", str(self.fixture.remote), str(verify)],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertEqual(read_cookie(verify / "mimo-token-monitor" / "settings.db"), '"local-exit"')
+        self.assertEqual(
+            (verify / "financial-data-backup" / "remote.txt").read_text(encoding="utf-8"),
+            "remote-latest",
+        )
+
+    def test_push_stops_at_retry_limit(self):
+        clone = Path(self.tmp.name) / "competing"
+        subprocess.run(
+            ["git", "clone", "-b", "main", str(self.fixture.remote), str(clone)],
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        run_git(clone, "config", "user.name", "Competitor")
+        run_git(clone, "config", "user.email", "competitor@example.test")
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local-exit")
+        base = self.fixture.config()
+        config = SyncConfig(
+            repo_root=base.repo_root, data_dir=base.data_dir, db_path=base.db_path,
+            timeout_seconds=base.timeout_seconds, push_retries=1,
+        )
+
+        result = RacingSyncService(config, clone).push_local_database()
+
+        self.assertEqual(result.status, SyncStatus.FAILED)
+        self.assertIn("重试上限", result.message)
+        self.assertEqual(
+            read_cookie_from_git(self.fixture.remote, "mimo-token-monitor/settings.db"),
+            '"remote-v1"',
+        )
+
+    def test_non_competitive_push_failure_is_not_retried(self):
+        db = self.fixture.repo / "mimo-token-monitor" / "settings.db"
+        db.unlink()
+        write_db(db, "local-exit")
+        for detail in ("remote: authentication required", "protected branch hook declined"):
+            service = NonCompetitiveFailureService(self.fixture.config(), detail)
+
+            result = service.push_local_database()
+
+            self.assertEqual(result.status, SyncStatus.FAILED)
+            self.assertEqual(service.push_attempts, 1)
+
         repo = self.fixture.repo
         db = repo / "mimo-token-monitor" / "settings.db"
         db.unlink()
