@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QApplication, QDialog
 
 from config import load_config, save_config
 from data_sync import DataSyncService, SyncConfig, SyncResult, SyncStatus
-from sync_runtime import run_startup_sync
+from sync_runtime import ExitSyncController, run_startup_sync
 from widget import SettingsDialog, TokenWidget
 
 
@@ -98,7 +98,15 @@ def initialize_window(app, service):
         else:
             return None, startup_result
 
-    widget = TokenWidget(cfg)
+    widget = TokenWidget(cfg, startup_sync_result=startup_result)
+    controller = ExitSyncController(
+        service,
+        widget.finish_quit,
+        widget.show_sync_result,
+        parent=widget,
+    )
+    widget._exit_callback = controller.request_exit
+    widget._exit_sync_controller = controller
     widget.show()
     return widget, startup_result
 
