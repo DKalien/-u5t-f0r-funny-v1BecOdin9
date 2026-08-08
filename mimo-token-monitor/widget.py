@@ -1234,6 +1234,7 @@ class TokenWidget(QWidget):
     def _do_fetch(self):
         if self._exit_requested:
             return
+        self._do_fetch_gpt()
         display_mode = self.cfg.get("display_mode", "mimo")
         if display_mode == "third_party":
             self._do_fetch_third_party()
