@@ -1,7 +1,5 @@
 # MiMo 设置数据库 Git 同步实施计划
 
-> **状态：已完成。** 本文件保留为实施过程记录，其中分步代码片段不再作为现行接口或运维说明；当前行为以 `mimo-token-monitor/README.md`、`mimo-token-monitor/CLAUDE.md` 和同主题设计规格为准。
-
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 在进程首次显示悬浮窗前以远端 `settings.db` 覆盖本地有效副本，并在真正退出时只提交和推送本地 `mimo-token-monitor/settings.db`，不影响共享仓库中的其他程序数据。
@@ -17,7 +15,7 @@
 - 启动同步远端优先；二进制 SQLite 不做合并；远端 DB 必须通过 `PRAGMA quick_check` 后才能原子覆盖本地文件。
 - 真正退出时本机 DB 优先；每次推送都基于最新远端完整 tree 重建仅替换目标 blob 的提交，不使用无条件 force push。
 - 启动失败继续使用本地 DB；退出失败保留本地 DB 并正常退出。
-- Git 默认 remote 为 `origin`、branch 为 `main`；每次启动拉取或退出推送共享 `30` 秒总 operation deadline；push 最多尝试 `3` 次（首次尝试加最多 2 次竞争重试）。
+- Git 默认 remote 为 `origin`、branch 为 `main`、单次命令超时为 `30` 秒、push 竞争最多重试 `3` 次。
 - 不新增第三方依赖；沿用 `MIMO_TOKEN_MONITOR_DATA_DIR`，新增 `MIMO_TOKEN_MONITOR_GIT_REMOTE`、`MIMO_TOKEN_MONITOR_GIT_BRANCH`、`MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS`、`MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES`。
 - 所有 Git 临时文件和临时 index 必须在 `finally` 清理；日志不得包含 Cookie、数据库内容、URL 用户名、密码或 token。
 - Qt 主线程不得执行 Git 网络操作；重复启动只唤醒现有窗口；关闭窗口只隐藏到托盘。
@@ -1334,13 +1332,13 @@ git commit -m "test(data-sync): 覆盖同步失败与窗口生命周期"
 | `MIMO_TOKEN_MONITOR_DATA_DIR` | `D:\python\data\mimo-token-monitor` | 数据目录；其父目录被视为仓库根目录 |
 | `MIMO_TOKEN_MONITOR_GIT_REMOTE` | `origin` | Git 远端名 |
 | `MIMO_TOKEN_MONITOR_GIT_BRANCH` | `main` | Git 分支名 |
-| `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每次启动/退出同步的总 Git operation 预算秒数 |
-| `MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES` | `3` | 最多 push 尝试次数；默认 3 表示首次尝试加最多 2 次竞争重试 |
+| `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每条 Git 命令超时秒数 |
+| `MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES` | `3` | non-fast-forward 竞争重试次数 |
 ```
 
 - [ ] **Step 2: 更新 AGENTS.md 中过时测试说明和模块结构**
 
-将当时过期的测试说明替换为：
+把“无测试、无 lint 配置”替换为：
 
 ```markdown
 # 运行全部 unittest

@@ -1158,6 +1158,8 @@ class TokenWidget(QWidget):
         if self._exit_requested:
             return
         self._exit_requested = True
+        self.setEnabled(False)
+        self._timer.stop()
         if self._exit_callback is not None:
             self._exit_callback()
         else:
@@ -1232,17 +1234,8 @@ class TokenWidget(QWidget):
     def _do_fetch(self):
         if self._exit_requested:
             return
-        # Record every refresh attempt immediately. Individual completion
-        # callbacks update this again when their request finishes.
-        self._last_update = datetime.now().strftime("%H:%M:%S")
-        self.update()
-        display_mode = self.cfg.get("display_mode", MIMO_MODE)
-        if display_mode == OVERVIEW_MODE:
-            self._do_fetch_mimo()
-            self._do_fetch_third_party()
-            self._do_fetch_gpt()
-            return
-        if display_mode == THIRD_PARTY_MODE:
+        display_mode = self.cfg.get("display_mode", "mimo")
+        if display_mode == "third_party":
             self._do_fetch_third_party()
             return
         self._do_fetch_mimo()
