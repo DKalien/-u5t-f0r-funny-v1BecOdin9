@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 
 ## 项目概述
 
-MiMo Token Monitor — 小米 MiMo API Token 用量桌面悬浮窗监控工具。Python + PyQt6 桌面应用，通过浏览器 Cookie 认证调用 `platform.xiaomimimo.com` REST API，实时显示 Token 用量、余额和消耗速率。
+MiMo Token Monitor — MiMo Token Plan、WLB 与 GPT 周限额用量桌面悬浮窗。Python + PyQt6 桌面应用，通过浏览器 Cookie 认证调用 `platform.xiaomimimo.com` REST API，并提供 Codex Router 日常维护入口。
 
 ## 常用命令
 
@@ -39,7 +39,7 @@ Python 模块采用单目录扁平结构：
 - **code_sync.py** — 检查并同步代码项目 `mimo-token-monitor/`；当前运行态只由轻量启动器在启动前调用，并且只允许干净工作区快进。模块保留独立的源码推送能力，但程序退出流程不调用它。
 - **sync_runtime.py** — 用 QThread 编排启动拉取与真正退出推送，保证 Git 网络操作不阻塞 Qt 主线程。
 
-数据流：轻量启动器路径为 `launcher.py` → `code_sync.py` 检查并快进拉取代码 → 启动 `main.py`；直接运行 `main.py` 会跳过源码同步。进入应用后，`data_sync.py` 在窗口显示前拉取设置 → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制；真正退出时由 `sync_runtime.py` 在后台仅推送设置数据库。
+数据流：轻量启动器路径为 `launcher.py` → `code_sync.py` 检查并快进拉取代码 → 启动 `main.py`；直接运行 `main.py` 会跳过源码同步。进入应用后，`data_sync.py` 在窗口显示前拉取设置 → `config.py` 加载配置 → `TokenWidget` 通过 `QTimer` 定时触发 → `FetchWorker` 在子线程调用 `api_client` → 信号回传 → `_parse_plan()` 解析 → `paintEvent()` 绘制；真正退出时由 `sync_runtime.py` 在后台仅推送设置数据库。托盘路由操作走 `TokenWidget` → `RouterWorker` → `router_control.py` → Codex Router 现有脚本，不进入用量查询或设置同步链路。
 
 ## 关键实现细节
 
@@ -51,6 +51,7 @@ Python 模块采用单目录扁平结构：
 - 内置 `PLAN_TIERS` 常量（4 个挡位：Lite ¥39 / Standard ¥99 / Pro ¥329 / Max ¥659），通过 `_get_plan_tier_info()` 根据套餐总额自动匹配挡位并计算每 Credit 单价，在悬浮窗内显示已用额度折合金额。
 - 当余额为 0 时，悬浮窗自动隐藏余额显示（包括右上角金额和 tooltip 中的余额行）。
 - 系统托盘：`QSystemTrayIcon` 实现最小化到托盘，右上角绘制最小化按钮（`─`），双击托盘图标恢复窗口，托盘 tooltip 与悬浮窗同步更新。
+- Codex Router 维护：`router_control.py` 默认从 `~/.codex/codex-router/install-manifest.json` 读取 `current.sourceRoot`，可由 `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖。元数据更新依次运行 `catalog.mjs` 和服务重启；启停复用 `codex-router.ps1 enable|disable`。全部命令由 `RouterWorker` 后台串行执行，首个失败即停止，操作期间禁用路由菜单并阻止退出。
 - 单实例：使用 Windows Mutex 防止重复启动，并通过命名事件唤醒已有窗口；禁止把第二次启动保留在阻塞提示框中。
 - 进度条填充圆角动态调整：当填充宽度较小时，圆角半径限制为 `min(4, fill_w//2)`，避免超出外框圆角范围。
 - 今日用量计算：通过记录每天首次刷新时的月累计用量作为基准，后续刷新时计算差值得到今日用量。基准值持久化存储，程序重启不丢失数据。

@@ -1,6 +1,6 @@
 # MiMo Token Monitor
 
-小米 MiMo API Token 用量实时监控桌面悬浮窗。
+MiMo Token Plan、WLB 与 GPT 周限额用量监控桌面悬浮窗。
 
 ## 功能
 
@@ -16,6 +16,7 @@
 - 可拖动、半透明、置顶显示；标题栏图钉按钮可切换置顶状态，默认置顶并自动保存
 - **跨窗口边框吸附**：可与 ETF Tracker 悬浮窗相互吸附，主屏和副屏均支持，并兼容不同 DPI 的显示器
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip
+- **Codex Router 维护**：从托盘更新模型元数据，并开启、关闭或重启路由器
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
 - **用量总览页面**：标题栏切换到“总览”后，并列显示 Token Plan、WLB 与 GPT 周限额的使用百分比和进度条
@@ -108,6 +109,19 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   - 路由控制：开启或关闭 Codex Router，也可直接重启；操作在后台执行并通过托盘通知结果
   - 悬停托盘图标：显示用量概览
 
+### Codex Router 维护
+
+- 需要先安装 Codex Router；程序默认从
+  `~/.codex/codex-router/install-manifest.json` 读取当前源码目录。
+- “更新模型元数据”依次运行 `node src/catalog.mjs` 和
+  `node src/service.mjs restart`，更新失败时不会继续重启。
+- “开启路由”和“关闭路由”复用路由器的 `codex-router.ps1 enable|disable`，因此会
+  同步调整 Codex 配置和后台服务；“重启路由器”只重启现有服务。
+- 所有操作均在后台线程执行。执行期间路由菜单会暂时禁用，完成后通过托盘通知结果；
+  为避免中途销毁线程，操作完成前不能退出程序。
+- 路由器源码不在安装清单记录的位置时，可设置
+  `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 指向有效的 Codex Router 项目根目录。
+
 ### 多屏吸附说明
 
 - 两个程序使用固定的原生窗口标题识别彼此，不会吸附到普通应用窗口或设置对话框。
@@ -166,8 +180,6 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - `D:\python\data` 必须是 Git 仓库，并配置可访问的默认远端分支 `origin/main`；可通过 `MIMO_TOKEN_MONITOR_GIT_REMOTE` 和 `MIMO_TOKEN_MONITOR_GIT_BRANCH` 覆盖远端名与分支名，认证沿用本机 Git/SSH 配置。
 - 启动时远端 `settings.db` 优先。远端文件通过 SQLite `PRAGMA quick_check` 后才会原子覆盖本地文件；同步失败时继续使用本地数据库。
 - 只有托盘或悬浮窗菜单中的“退出”会推送；最小化到托盘不会推送。
-- Codex Router 位置默认从 `~/.codex/codex-router/install-manifest.json` 读取；可用
-  `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖。
 - 退出时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
 - 推送失败时本地数据库保持不变，程序仍正常退出。
 - 程序不会对共享仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
