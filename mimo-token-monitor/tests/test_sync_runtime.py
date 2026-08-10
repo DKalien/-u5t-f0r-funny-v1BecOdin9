@@ -11,6 +11,7 @@ from PyQt6.QtGui import QCloseEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from data_sync import SyncResult, SyncStatus  # noqa: E402
+from router_control import RouterResult  # noqa: E402
 from sync_runtime import ExitSyncController, run_startup_sync  # noqa: E402
 from widget import TokenWidget  # noqa: E402
 
@@ -157,6 +158,37 @@ class TestExitRuntime(unittest.TestCase):
             widget.closeEvent(event)
             event.ignore.assert_called_once()
             callback.assert_not_called()
+            widget._tray_icon.showMessage.assert_called_once()
+
+    def test_tray_menu_exposes_router_maintenance(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            menu = widget._tray_icon.contextMenu()
+            actions = {action.text(): action for action in menu.actions()}
+            self.assertIn("更新模型元数据", actions)
+            self.assertIn("路由控制", actions)
+            router_menu = actions["路由控制"].menu()
+            self.assertIsNotNone(router_menu)
+            self.assertEqual(
+                [action.text() for action in router_menu.actions() if not action.isSeparator()],
+                ["开启路由", "关闭路由", "重启路由器"],
+            )
+
+    def test_router_completion_reenables_menu_and_notifies(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            worker = Mock()
+            widget._router_worker = worker
+            widget._tray_icon.showMessage = Mock()
+            for action in widget._router_actions:
+                action.setEnabled(False)
+
+            widget._on_router_operation_done(
+                RouterResult(True, "模型元数据已更新，路由器已重启")
+            )
+
+            worker.wait.assert_called_once()
+            worker.deleteLater.assert_called_once()
+            self.assertIsNone(widget._router_worker)
+            self.assertTrue(all(action.isEnabled() for action in widget._router_actions))
             widget._tray_icon.showMessage.assert_called_once()
 
 

@@ -13,6 +13,7 @@ import sys
 import api_client
 from config import save_config
 import cookie_reader
+import router_control
 import snapshot_writer
 import window_snap
 
@@ -150,6 +151,17 @@ class GPTFetchWorker(QThread):
         self.finished.emit(result)
 
 
+class RouterWorker(QThread):
+    completed = pyqtSignal(object)
+
+    def __init__(self, operation: str, parent=None):
+        super().__init__(parent)
+        self.operation = operation
+
+    def run(self):
+        self.completed.emit(router_control.run_router_operation(self.operation))
+
+
 # ── Settings dialog ─────────────────────────────────────────────
 class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
@@ -285,6 +297,8 @@ class TokenWidget(QWidget):
         self._gpt_error = ""
         self._last_update = "等待更新..."
         self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
+        self._router_worker = None
+        self._router_actions = []
 
         # Data from API
         self._balance = None       # float, yuan
@@ -482,7 +496,8 @@ class TokenWidget(QWidget):
             self._tray_icon = QSystemTrayIcon(self)
 
         # 托盘右键菜单
-        tray_menu = QMenu()
+        tray_menu = QMenu(self)
+        self._tray_menu = tray_menu
 
         show_act = QAction("显示主窗口", self)
         show_act.triggered.connect(self._show_window)
@@ -498,6 +513,30 @@ class TokenWidget(QWidget):
 
         tray_menu.addSeparator()
 
+        metadata_act = QAction("更新模型元数据", self)
+        metadata_act.triggered.connect(
+            lambda _checked=False: self._start_router_operation("refresh")
+        )
+        tray_menu.addAction(metadata_act)
+
+        router_menu = tray_menu.addMenu("路由控制")
+        enable_act = router_menu.addAction("开启路由")
+        enable_act.triggered.connect(
+            lambda _checked=False: self._start_router_operation("enable")
+        )
+        disable_act = router_menu.addAction("关闭路由")
+        disable_act.triggered.connect(
+            lambda _checked=False: self._start_router_operation("disable")
+        )
+        router_menu.addSeparator()
+        restart_act = router_menu.addAction("重启路由器")
+        restart_act.triggered.connect(
+            lambda _checked=False: self._start_router_operation("restart")
+        )
+        self._router_actions = [metadata_act, enable_act, disable_act, restart_act]
+
+        tray_menu.addSeparator()
+
         quit_act = QAction("退出", self)
         quit_act.triggered.connect(self._quit_app)
         tray_menu.addAction(quit_act)
@@ -509,6 +548,55 @@ class TokenWidget(QWidget):
         self._tray_icon.activated.connect(self._on_tray_activated)
 
         self._tray_icon.show()
+
+    def _start_router_operation(self, operation: str):
+        if self._exit_requested:
+            return
+        if self._router_worker is not None and self._router_worker.isRunning():
+            self._tray_icon.showMessage(
+                "Codex Router",
+                "已有路由操作正在进行",
+                QSystemTrayIcon.MessageIcon.Warning,
+                3000,
+            )
+            return
+
+        labels = {
+            "refresh": "正在更新模型元数据...",
+            "enable": "正在开启路由...",
+            "disable": "正在关闭路由...",
+            "restart": "正在重启路由器...",
+        }
+        for action in self._router_actions:
+            action.setEnabled(False)
+        self._tray_icon.showMessage(
+            "Codex Router",
+            labels.get(operation, "正在执行路由操作..."),
+            QSystemTrayIcon.MessageIcon.Information,
+            2000,
+        )
+        self._router_worker = RouterWorker(operation, self)
+        self._router_worker.completed.connect(self._on_router_operation_done)
+        self._router_worker.start()
+
+    def _on_router_operation_done(self, result: router_control.RouterResult):
+        worker = self._router_worker
+        if worker is not None:
+            worker.wait()
+            worker.deleteLater()
+        self._router_worker = None
+        for action in self._router_actions:
+            action.setEnabled(True)
+
+        message = result.message
+        if result.detail:
+            message = f"{message}\n{result.detail}"
+        icon = (
+            QSystemTrayIcon.MessageIcon.Information
+            if result.ok
+            else QSystemTrayIcon.MessageIcon.Warning
+        )
+        self._tray_icon.showMessage("Codex Router", message, icon, 5000)
 
     # ── Painting ────────────────────────────────────────────────
     def paintEvent(self, _event):
@@ -1163,6 +1251,14 @@ class TokenWidget(QWidget):
     def _quit_app(self):
         """真正退出应用程序；同步期间忽略重复请求。"""
         if self._exit_requested:
+            return
+        if self._router_worker is not None and self._router_worker.isRunning():
+            self._tray_icon.showMessage(
+                "Codex Router",
+                "路由操作完成后再退出",
+                QSystemTrayIcon.MessageIcon.Warning,
+                3000,
+            )
             return
         self._exit_requested = True
         self.setEnabled(False)

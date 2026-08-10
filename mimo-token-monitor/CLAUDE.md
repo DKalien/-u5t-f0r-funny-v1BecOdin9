@@ -31,7 +31,8 @@ Python 模块采用单目录扁平结构：
 - **config.py** — 配置管理。默认存储于外置 SQLite `D:\python\data\mimo-token-monitor\settings.db`，可由 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖；首次运行会从旧的 `~/.mimo-widget/config.json` 迁移，外置库不可用时保留 JSON 回退。主要字段包括 MiMo Cookie、刷新与显示设置、WLB 配置、GPT Session Cookie 和当前显示模式；完整默认值以 `config.py::DEFAULT_CONFIG` 为准。
 - **api_client.py** — API 客户端。包含 MiMo、WLB 与 GPT 周限额查询；GPT 查询依次尝试本机 Codex 登录、ChatGPT Session Cookie 和本地会话记录，并对网络、429、5xx 瞬时失败重试一次。
 - **cookie_reader.py** — 浏览器 Cookie 自动读取。优先通过 CDP 从运行中的浏览器读取明文 Cookie（绕过 v20 加密），回退到 `browser_cookie3` 读取本地数据库。设置对话框「从浏览器导入」按钮调用此模块。
-- **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）。
+- **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）；托盘还通过后台线程提供 Codex Router 元数据更新、启停和重启入口。
+- **router_control.py** — Codex Router 托盘操作边界。优先从安装清单读取源码目录，可由 `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖；只串行调用路由器现有脚本，并在首个失败处停止。
 - **window_snap.py** — Win32 顶层窗口枚举、窗口标题筛选、Qt 逻辑坐标与 Win32 物理像素坐标转换，以及跨屏跨窗口边框吸附的纯几何计算。
 - **snapshot_writer.py** — 快照写入。为 claude-hud 生成用量快照 JSON 文件，包含余额、用量、今日用量等信息。
 - **data_sync.py** — 以 Git plumbing、临时 index 和 SQLite 校验同步唯一目标 `mimo-token-monitor/settings.db`，不得操作共享仓库其他路径。

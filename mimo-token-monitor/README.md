@@ -103,7 +103,9 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - **最小化按钮**：右上角 `─` 按钮，点击最小化到系统托盘
 - **系统托盘**：
   - 双击托盘图标：恢复显示悬浮窗
-  - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / 退出
+  - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / 更新模型元数据 /
+    路由控制 / 退出
+  - 路由控制：开启或关闭 Codex Router，也可直接重启；操作在后台执行并通过托盘通知结果
   - 悬停托盘图标：显示用量概览
 
 ### 多屏吸附说明
@@ -164,6 +166,8 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - `D:\python\data` 必须是 Git 仓库，并配置可访问的默认远端分支 `origin/main`；可通过 `MIMO_TOKEN_MONITOR_GIT_REMOTE` 和 `MIMO_TOKEN_MONITOR_GIT_BRANCH` 覆盖远端名与分支名，认证沿用本机 Git/SSH 配置。
 - 启动时远端 `settings.db` 优先。远端文件通过 SQLite `PRAGMA quick_check` 后才会原子覆盖本地文件；同步失败时继续使用本地数据库。
 - 只有托盘或悬浮窗菜单中的“退出”会推送；最小化到托盘不会推送。
+- Codex Router 位置默认从 `~/.codex/codex-router/install-manifest.json` 读取；可用
+  `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖。
 - 退出时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
 - 推送失败时本地数据库保持不变，程序仍正常退出。
 - 程序不会对共享仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
