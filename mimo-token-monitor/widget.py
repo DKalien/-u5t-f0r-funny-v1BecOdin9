@@ -1236,12 +1236,17 @@ class TokenWidget(QWidget):
     def _do_fetch(self):
         if self._exit_requested:
             return
-        self._do_fetch_gpt()
+        self._last_update = datetime.now().strftime("%H:%M:%S")
+        self.update()
         display_mode = self.cfg.get("display_mode", "mimo")
-        if display_mode == "third_party":
+        if display_mode == OVERVIEW_MODE:
+            self._do_fetch_mimo()
             self._do_fetch_third_party()
-            return
-        self._do_fetch_mimo()
+        elif display_mode == THIRD_PARTY_MODE:
+            self._do_fetch_third_party()
+        else:
+            self._do_fetch_mimo()
+        self._do_fetch_gpt()
 
     def _do_fetch_mimo(self):
         """Dispatch MiMo plan/balance fetch."""

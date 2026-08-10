@@ -121,6 +121,16 @@ class TestGitBoundary(unittest.TestCase):
         with self.assertRaisesRegex(GitCommandError, "超时"):
             service._git("status")
 
+    def test_git_runner_receives_hidden_window_kwargs(self):
+        runner = Mock(return_value=subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=b"ok", stderr=b""
+        ))
+        hidden = {"creationflags": 123}
+        with patch("data_sync.hidden_subprocess_kwargs", return_value=hidden):
+            DataSyncService(self.config, runner=runner)._git("status")
+
+        self.assertEqual(runner.call_args.kwargs["creationflags"], 123)
+
     def test_sensitive_url_is_redacted_and_truncated(self):
         detail = "x" * 2100 + " https://alice:secret@example.test/path?token=abc"
         clean = _sanitize_detail(detail)
