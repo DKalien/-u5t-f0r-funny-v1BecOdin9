@@ -30,6 +30,7 @@ def tearDownModule():
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPoint, QRect, Qt
 from PyQt6.QtWidgets import QApplication
 
 # Ensure QApplication exists
@@ -83,6 +84,24 @@ class TestModeCycle(unittest.TestCase):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         w._toggle_display_mode()
         self.assertEqual(w.cfg["display_mode"], MIMO_MODE)
+        w.close()
+
+    def test_switch_button_mouse_move_does_not_drag_window(self):
+        w = _make_widget(display_mode=MIMO_MODE)
+        w.move(200, 200)
+        w._switch_rect = QRect(0, 0, 20, 20)
+
+        press = Mock()
+        press.button.return_value = Qt.MouseButton.LeftButton
+        press.pos.return_value = QPoint(10, 10)
+        w.mousePressEvent(press)
+
+        move = Mock()
+        move.buttons.return_value = Qt.MouseButton.LeftButton
+        move.position.return_value.toPoint.return_value = QPoint(11, 10)
+        w.mouseMoveEvent(move)
+
+        self.assertEqual((w.x(), w.y()), (200, 200))
         w.close()
 
 

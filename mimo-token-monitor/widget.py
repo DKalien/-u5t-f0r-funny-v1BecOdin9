@@ -276,7 +276,7 @@ class TokenWidget(QWidget):
         self.cfg = cfg
         self._exit_callback = exit_callback
         self._exit_requested = False
-        self._drag_pos = QPoint()
+        self._drag_pos: QPoint | None = None
         self._last_error = ""
         self._mimo_error = ""
         self._tp_error = ""
@@ -1005,6 +1005,7 @@ class TokenWidget(QWidget):
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = None
             # 检测是否点击显示模式切换图标
             if hasattr(self, '_switch_rect') and self._switch_rect.contains(e.pos()):
                 self._toggle_display_mode()
@@ -1029,7 +1030,7 @@ class TokenWidget(QWidget):
             e.accept()
 
     def mouseMoveEvent(self, e):
-        if e.buttons() & Qt.MouseButton.LeftButton:
+        if self._drag_pos is not None and e.buttons() & Qt.MouseButton.LeftButton:
             new_pos = e.globalPosition().toPoint() - self._drag_pos
 
             screen = QApplication.screenAt(e.globalPosition().toPoint())
@@ -1115,7 +1116,8 @@ class TokenWidget(QWidget):
     def mouseReleaseEvent(self, e):
         if self._exit_requested:
             return
-        if e.button() == Qt.MouseButton.LeftButton:
+        if e.button() == Qt.MouseButton.LeftButton and self._drag_pos is not None:
+            self._drag_pos = None
             self.cfg["position"] = [self.x(), self.y()]
             save_config(self.cfg)
 
