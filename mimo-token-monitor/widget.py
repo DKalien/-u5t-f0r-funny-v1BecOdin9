@@ -288,6 +288,7 @@ class TokenWidget(QWidget):
         self.cfg = cfg
         self._exit_callback = exit_callback
         self._exit_requested = False
+        self._restart_requested = False
         self._drag_pos: QPoint | None = None
         self._last_error = ""
         self._mimo_error = ""
@@ -519,7 +520,8 @@ class TokenWidget(QWidget):
         )
         tray_menu.addAction(metadata_act)
 
-        router_menu = tray_menu.addMenu("路由控制")
+        router_menu = tray_menu.addMenu("路由控制（状态未知）")
+        self._router_menu_action = router_menu.menuAction()
         enable_act = router_menu.addAction("开启路由")
         enable_act.triggered.connect(
             lambda _checked=False: self._start_router_operation("enable")
@@ -534,8 +536,15 @@ class TokenWidget(QWidget):
             lambda _checked=False: self._start_router_operation("restart")
         )
         self._router_actions = [metadata_act, enable_act, disable_act, restart_act]
+        tray_menu.aboutToShow.connect(self._refresh_router_state)
 
         tray_menu.addSeparator()
+
+        restart_widget_act = QAction("重启悬浮窗", self)
+        restart_widget_act.triggered.connect(
+            lambda _checked=False: self._quit_app(restart=True)
+        )
+        tray_menu.addAction(restart_widget_act)
 
         quit_act = QAction("退出", self)
         quit_act.triggered.connect(self._quit_app)
@@ -548,6 +557,39 @@ class TokenWidget(QWidget):
         self._tray_icon.activated.connect(self._on_tray_activated)
 
         self._tray_icon.show()
+
+    def _set_router_state(self, enabled: bool | None, *, checking=False):
+        state = (
+            "检测中…"
+            if checking
+            else "状态未知" if enabled is None else "已开启" if enabled else "已关闭"
+        )
+        self._router_menu_action.setText(f"路由控制（{state}）")
+
+    def _refresh_router_state(self):
+        if self._exit_requested:
+            return
+        if self._router_worker is not None and self._router_worker.isRunning():
+            return
+        self._set_router_state(None, checking=True)
+        for action in self._router_actions:
+            action.setEnabled(False)
+        self._router_worker = RouterWorker("status", self)
+        self._router_worker.completed.connect(self._on_router_status_done)
+        self._router_worker.start()
+
+    def _finish_router_worker(self):
+        worker = self._router_worker
+        if worker is not None:
+            worker.wait()
+            worker.deleteLater()
+        self._router_worker = None
+        for action in self._router_actions:
+            action.setEnabled(True)
+
+    def _on_router_status_done(self, result: router_control.RouterResult):
+        self._finish_router_worker()
+        self._set_router_state(result.route_enabled if result.ok else None)
 
     def _start_router_operation(self, operation: str):
         if self._exit_requested:
@@ -580,13 +622,11 @@ class TokenWidget(QWidget):
         self._router_worker.start()
 
     def _on_router_operation_done(self, result: router_control.RouterResult):
-        worker = self._router_worker
-        if worker is not None:
-            worker.wait()
-            worker.deleteLater()
-        self._router_worker = None
-        for action in self._router_actions:
-            action.setEnabled(True)
+        self._finish_router_worker()
+        if result.route_enabled is not None:
+            self._set_router_state(result.route_enabled)
+        elif not result.ok:
+            self._set_router_state(None)
 
         message = result.message
         if result.detail:
@@ -1248,7 +1288,7 @@ class TokenWidget(QWidget):
             5000,
         )
 
-    def _quit_app(self):
+    def _quit_app(self, _checked=False, *, restart=False):
         """真正退出应用程序；同步期间忽略重复请求。"""
         if self._exit_requested:
             return
@@ -1260,6 +1300,7 @@ class TokenWidget(QWidget):
                 3000,
             )
             return
+        self._restart_requested = restart
         self._exit_requested = True
         self.setEnabled(False)
         self._timer.stop()

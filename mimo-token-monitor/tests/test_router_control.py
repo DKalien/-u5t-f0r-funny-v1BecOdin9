@@ -17,6 +17,7 @@ def make_router_root(base: Path) -> Path:
     (root / "src").mkdir(parents=True)
     (root / "codex-router.ps1").touch()
     (root / "src" / "catalog.mjs").touch()
+    (root / "src" / "config-manager.mjs").touch()
     (root / "src" / "service.mjs").touch()
     return root
 
@@ -106,6 +107,34 @@ class TestRouterControl(unittest.TestCase):
             self.assertEqual(calls[0][-2:], [str(root / "codex-router.ps1"), "enable"])
             self.assertEqual(calls[1][-2:], [str(root / "codex-router.ps1"), "disable"])
             self.assertEqual(calls[2][-2:], [str(root / "src" / "service.mjs"), "restart"])
+
+    def test_status_uses_router_config_manager(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_router_root(Path(tmp))
+            calls = []
+
+            def runner(command, **_kwargs):
+                calls.append(command)
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    b'{"mode":"router"}\n',
+                    b"",
+                )
+
+            with patch("router_control.hidden_subprocess_kwargs", return_value={}):
+                result = run_router_operation(
+                    "status",
+                    runner=runner,
+                    environ={ROUTER_ROOT_ENV: str(root)},
+                )
+
+            self.assertTrue(result.ok)
+            self.assertTrue(result.route_enabled)
+            self.assertEqual(
+                calls,
+                [["node", str(root / "src" / "config-manager.mjs"), "status"]],
+            )
 
 
 if __name__ == "__main__":

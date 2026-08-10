@@ -1,8 +1,9 @@
 import ctypes
 import sys
 from ctypes import wintypes
+from pathlib import Path
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QProcess, QTimer
 from PyQt6.QtWidgets import QApplication, QDialog
 
 from config import load_config, save_config
@@ -66,6 +67,21 @@ def activate_existing_instance() -> bool:
 def activation_requested(event) -> bool:
     return kernel32.WaitForSingleObject(event, 0) == WAIT_OBJECT_0
 
+def restart_application() -> bool:
+    frozen = getattr(sys, "frozen", False)
+    arguments = sys.argv[1:] if frozen else sys.argv
+    working_directory = (
+        Path(sys.executable).resolve().parent
+        if frozen
+        else Path(__file__).resolve().parent
+    )
+    started, _pid = QProcess.startDetached(
+        sys.executable,
+        arguments,
+        str(working_directory),
+    )
+    return started
+
 def build_sync_service() -> tuple[DataSyncService | None, SyncResult | None]:
     try:
         return DataSyncService(SyncConfig.from_environment()), None
@@ -108,6 +124,7 @@ def main() -> int:
         return 0
 
     activation_event = create_activation_event()
+    restart_requested = False
     try:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
@@ -135,12 +152,23 @@ def main() -> int:
         activation_timer.timeout.connect(restore_existing_window)
         activation_timer.start()
 
-        return app.exec()
+        exit_code = app.exec()
+        restart_requested = widget._restart_requested
     finally:
         if "activation_timer" in locals():
             activation_timer.stop()
         kernel32.CloseHandle(activation_event)
         kernel32.CloseHandle(mutex)
+
+    if restart_requested and not restart_application():
+        ctypes.windll.user32.MessageBoxW(
+            None,
+            "无法重新启动悬浮窗，请手动再次启动。",
+            "MiMo Token Monitor",
+            0x10,
+        )
+        return 1
+    return exit_code
 
 if __name__ == "__main__":
     raise SystemExit(main())

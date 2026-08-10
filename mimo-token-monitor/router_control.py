@@ -8,7 +8,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping
 
 from process_utils import hidden_subprocess_kwargs
 
@@ -21,6 +21,7 @@ class RouterResult:
     ok: bool
     message: str
     detail: str = ""
+    route_enabled: bool | None = None
 
 
 def resolve_router_root(environ: Mapping[str, str] | None = None) -> Path:
@@ -43,6 +44,7 @@ def resolve_router_root(environ: Mapping[str, str] | None = None) -> Path:
     required = (
         root / "codex-router.ps1",
         root / "src" / "catalog.mjs",
+        root / "src" / "config-manager.mjs",
         root / "src" / "service.mjs",
     )
     if not all(path.is_file() for path in required):
@@ -54,7 +56,10 @@ def _commands(operation: str, root: Path) -> list[list[str]]:
     node = "node"
     catalog = str(root / "src" / "catalog.mjs")
     service = str(root / "src" / "service.mjs")
+    config_manager = str(root / "src" / "config-manager.mjs")
     script = str(root / "codex-router.ps1")
+    if operation == "status":
+        return [[node, config_manager, "status"]]
     if operation == "refresh":
         return [[node, catalog], [node, service, "restart"]]
     if operation == "restart":
@@ -101,6 +106,7 @@ def run_router_operation(
     timeout_seconds: float = 360,
 ) -> RouterResult:
     labels = {
+        "status": "检查路由状态",
         "refresh": "更新模型元数据",
         "enable": "开启路由",
         "disable": "关闭路由",
@@ -131,10 +137,28 @@ def run_router_operation(
         if result.returncode != 0:
             return RouterResult(False, f"{label}失败", _failure_detail(result))
 
+    if operation == "status":
+        try:
+            mode = json.loads(_decode(result.stdout))["mode"]
+            if mode not in {"router", "native"}:
+                raise ValueError
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return RouterResult(False, f"{label}失败", "路由器返回了无效状态")
+        enabled = mode == "router"
+        return RouterResult(
+            True,
+            "路由已开启" if enabled else "路由已关闭",
+            route_enabled=enabled,
+        )
+
     messages = {
         "refresh": "模型元数据已更新，路由器已重启",
         "enable": "路由已开启",
         "disable": "路由已关闭",
         "restart": "路由器已重启",
     }
-    return RouterResult(True, messages[operation])
+    return RouterResult(
+        True,
+        messages[operation],
+        route_enabled={"enable": True, "disable": False}.get(operation),
+    )

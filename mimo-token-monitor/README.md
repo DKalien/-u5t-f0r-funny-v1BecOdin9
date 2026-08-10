@@ -15,13 +15,13 @@ MiMo Token Plan、WLB 与 GPT 周限额用量监控桌面悬浮窗。
 - 支持按量付费用量查询
 - 可拖动、半透明、置顶显示；标题栏图钉按钮可切换置顶状态，默认置顶并自动保存
 - **跨窗口边框吸附**：可与 ETF Tracker 悬浮窗相互吸附，主屏和副屏均支持，并兼容不同 DPI 的显示器
-- **系统托盘**：最小化到托盘，双击恢复，实时 tooltip
-- **Codex Router 维护**：从托盘更新模型元数据，并开启、关闭或重启路由器
+- **系统托盘**：最小化到托盘，双击恢复，实时 tooltip，并可直接重启悬浮窗
+- **Codex Router 维护**：从托盘查看当前路由开关状态、更新模型元数据，并开启、关闭或重启路由器
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
 - **用量总览页面**：标题栏切换到“总览”后，并列显示 Token Plan、WLB 与 GPT 周限额的使用百分比和进度条
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
-- **设置数据库 Git 同步**：程序启动时、窗口显示前拉取远端 `mimo-token-monitor/settings.db`，真正退出时仅提交并推送该文件；关闭到托盘不推送
+- **设置数据库 Git 同步**：程序启动时、窗口显示前拉取远端 `mimo-token-monitor/settings.db`，退出或重启悬浮窗时仅提交并推送该文件；关闭到托盘不推送
 
 ## 使用方式
 
@@ -105,8 +105,9 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - **系统托盘**：
   - 双击托盘图标：恢复显示悬浮窗
   - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / 更新模型元数据 /
-    路由控制 / 退出
-  - 路由控制：开启或关闭 Codex Router，也可直接重启；操作在后台执行并通过托盘通知结果
+    路由控制 / 重启悬浮窗 / 退出
+  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；可开启、关闭或重启 Codex Router
+  - 重启悬浮窗：先按退出流程同步设置数据库，进程结束并释放单实例锁后再启动新实例
   - 悬停托盘图标：显示用量概览
 
 ### Codex Router 维护
@@ -117,6 +118,8 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   `node src/service.mjs restart`，更新失败时不会继续重启。
 - “开启路由”和“关闭路由”复用路由器的 `codex-router.ps1 enable|disable`，因此会
   同步调整 Codex 配置和后台服务；“重启路由器”只重启现有服务。
+- 打开托盘菜单时，程序会在后台调用 `node src/config-manager.mjs status`，根据其
+  `mode` 实时显示路由已开启或已关闭；检测失败时显示“状态未知”。
 - 所有操作均在后台线程执行。执行期间路由菜单会暂时禁用，完成后通过托盘通知结果；
   为避免中途销毁线程，操作完成前不能退出程序。
 - 路由器源码不在安装清单记录的位置时，可设置
@@ -179,9 +182,10 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 - `D:\python\data` 必须是 Git 仓库，并配置可访问的默认远端分支 `origin/main`；可通过 `MIMO_TOKEN_MONITOR_GIT_REMOTE` 和 `MIMO_TOKEN_MONITOR_GIT_BRANCH` 覆盖远端名与分支名，认证沿用本机 Git/SSH 配置。
 - 启动时远端 `settings.db` 优先。远端文件通过 SQLite `PRAGMA quick_check` 后才会原子覆盖本地文件；同步失败时继续使用本地数据库。
-- 只有托盘或悬浮窗菜单中的“退出”会推送；最小化到托盘不会推送。
-- 退出时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
-- 推送失败时本地数据库保持不变，程序仍正常退出。
+- 托盘或悬浮窗菜单中的“退出”以及托盘“重启悬浮窗”会推送；最小化到托盘不会推送。
+- 退出或重启时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
+- 退出流程不会提交或推送 `mimo-token-monitor` 源码；源码同步仅由轻量启动器在启动前执行安全快进拉取。
+- 推送失败时本地数据库保持不变，程序仍正常退出或继续重启。
 - 程序不会对共享仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
 
 可用环境变量：
@@ -203,4 +207,4 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 
 ### Git 同步超时
-启动拉取和真正退出推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时；本地 SQLite、文件写入等阶段在阶段完成后检查预算，不承诺抢占正在执行的系统调用。
+启动拉取和退出/重启推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时；本地 SQLite、文件写入等阶段在阶段完成后检查预算，不承诺抢占正在执行的系统调用。

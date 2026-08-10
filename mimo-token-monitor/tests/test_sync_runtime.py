@@ -1,4 +1,5 @@
 import os
+import sys
 import unittest
 from contextlib import contextmanager
 from unittest.mock import Mock, patch
@@ -165,13 +166,47 @@ class TestExitRuntime(unittest.TestCase):
             menu = widget._tray_icon.contextMenu()
             actions = {action.text(): action for action in menu.actions()}
             self.assertIn("更新模型元数据", actions)
-            self.assertIn("路由控制", actions)
-            router_menu = actions["路由控制"].menu()
+            self.assertIn("路由控制（状态未知）", actions)
+            self.assertIn("重启悬浮窗", actions)
+            router_menu = actions["路由控制（状态未知）"].menu()
             self.assertIsNotNone(router_menu)
             self.assertEqual(
                 [action.text() for action in router_menu.actions() if not action.isSeparator()],
                 ["开启路由", "关闭路由", "重启路由器"],
             )
+
+    def test_router_status_updates_tray_menu(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            worker = Mock()
+            widget._router_worker = worker
+
+            widget._on_router_status_done(
+                RouterResult(True, "路由已开启", route_enabled=True)
+            )
+
+            self.assertEqual(widget._router_menu_action.text(), "路由控制（已开启）")
+
+            widget._router_worker = Mock()
+            widget._on_router_status_done(
+                RouterResult(True, "路由已关闭", route_enabled=False)
+            )
+
+            self.assertEqual(widget._router_menu_action.text(), "路由控制（已关闭）")
+
+    def test_restart_action_requests_synced_exit(self):
+        callback = Mock()
+        with managed_widget(
+            {"position": [100, 100]}, exit_callback=callback
+        ) as widget:
+            actions = {
+                action.text(): action
+                for action in widget._tray_icon.contextMenu().actions()
+            }
+
+            actions["重启悬浮窗"].trigger()
+
+            self.assertTrue(widget._restart_requested)
+            callback.assert_called_once()
 
     def test_router_completion_reenables_menu_and_notifies(self):
         with managed_widget({"position": [100, 100]}) as widget:
@@ -230,6 +265,23 @@ class TestLifecycleDegradation(unittest.TestCase):
             widget._quit_app()
             widget._quit_app()
         callback.assert_called_once()
+
+    @patch("main.QProcess.startDetached", return_value=(True, 123))
+    def test_restart_relaunches_source_after_shutdown(self, start_detached):
+        from main import restart_application
+
+        with (
+            patch.object(sys, "argv", ["D:\\app\\main.py"]),
+            patch.object(sys, "executable", "D:\\Python\\pythonw.exe"),
+            patch.object(sys, "frozen", False, create=True),
+        ):
+            self.assertTrue(restart_application())
+
+        start_detached.assert_called_once_with(
+            "D:\\Python\\pythonw.exe",
+            ["D:\\app\\main.py"],
+            os.path.dirname(os.path.dirname(__file__)),
+        )
 
     @patch("main.save_config")
     @patch("main.load_config", return_value={})
