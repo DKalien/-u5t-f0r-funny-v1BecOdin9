@@ -1,5 +1,9 @@
 # encoding: utf-8
-import os, sys, tempfile, unittest, pathlib
+import os
+import pathlib
+import sys
+import tempfile
+import unittest
 from unittest.mock import Mock, patch
 
 # Ensure mimo-token-monitor package is importable
@@ -30,17 +34,16 @@ def tearDownModule():
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QRect, Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QPoint, QRect, Qt  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 # Ensure QApplication exists
 _app = QApplication.instance() or QApplication(sys.argv)
 
-from widget import (
+from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT,
-    _bar_color, _fmt_tokens,
 )
 
 
@@ -351,6 +354,20 @@ class TestThirdPartyCallbackExtraction(unittest.TestCase):
         w._on_third_party_fetch_done(wrapper)
         tooltip = w.toolTip()
         self.assertIn("55.5%", tooltip)
+        w.close()
+
+
+class TestGPTCallback(unittest.TestCase):
+    def test_failure_keeps_last_data_and_marks_it_stale(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        old_data = {"used_percent": 30.0, "remaining_percent": 70.0}
+        w._gpt_data = old_data
+
+        w._on_gpt_fetch_done({"ok": False, "data": None, "error": "请求超时"})
+
+        self.assertIs(w._gpt_data, old_data)
+        self.assertIn("继续显示上次数据", w._gpt_error)
+        self.assertIn("请求超时", w.toolTip())
         w.close()
 
 

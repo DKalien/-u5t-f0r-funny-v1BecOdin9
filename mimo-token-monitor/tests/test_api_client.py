@@ -146,8 +146,18 @@ class TestGPTWeeklyUsageParser(unittest.TestCase):
 
 class TestFetchGPTWeeklyUsage(unittest.TestCase):
 
+    def test_transient_status_is_retried_once(self):
+        from unittest.mock import Mock, patch
+        from api_client import _gpt_get
+        unavailable = Mock(status_code=503)
+        success = Mock(status_code=200)
+        with patch("api_client.requests.get", side_effect=[unavailable, success]) as get:
+            result = _gpt_get("https://example.test", {})
+        self.assertIs(result, success)
+        self.assertEqual(get.call_count, 2)
+
     def test_session_cookie_uses_get(self):
-        from unittest.mock import patch, Mock, call
+        from unittest.mock import patch, Mock
         from api_client import fetch_gpt_weekly_usage, GPT_AUTH_SESSION_URL, GPT_USAGE_URL
         auth_resp = Mock(status_code=200)
         auth_resp.json.return_value = {"accessToken": "tok", "account": {"id": "aid"}}
@@ -182,7 +192,9 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
 
 
     def test_local_auth_account_id_priority(self):
-        import pathlib, json, tempfile
+        import json
+        import pathlib
+        import tempfile
         from unittest.mock import patch, Mock
         from api_client import _gpt_try_local_auth
         usage_data = {"rate_limits": {"secondary": {"used_percent": 20.0}}}
@@ -216,8 +228,23 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
         # Must not display 0% for missing data
         self.assertIsNone(result["data"])
 
+    def test_failure_reports_each_source_reason(self):
+        import pathlib
+        import tempfile
+        from unittest.mock import patch
+        from api_client import fetch_gpt_weekly_usage
+        with tempfile.TemporaryDirectory() as td:
+            with patch("api_client._pl.Path.home", return_value=pathlib.Path(td)):
+                result = fetch_gpt_weekly_usage()
+        self.assertFalse(result["ok"])
+        self.assertIn("本机 Codex 登录: 未找到登录令牌", result["error"])
+        self.assertIn("ChatGPT Cookie: 未配置", result["error"])
+        self.assertIn("本地会话: 会话目录不存在", result["error"])
+
     def test_jsonl_fallback(self):
-        import json, tempfile, pathlib
+        import json
+        import pathlib
+        import tempfile
         from unittest.mock import patch
         from api_client import fetch_gpt_weekly_usage
         with tempfile.TemporaryDirectory() as td:
@@ -238,7 +265,9 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
 
 
     def test_jsonl_rate_limits_object(self):
-        import json, tempfile, pathlib
+        import json
+        import pathlib
+        import tempfile
         from unittest.mock import patch
         from api_client import fetch_gpt_weekly_usage
         with tempfile.TemporaryDirectory() as td:
@@ -258,7 +287,9 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             self.assertAlmostEqual(result["data"]["used_percent"], 77.0)
 
     def test_http_error_returns_none(self):
-        import pathlib, json, tempfile
+        import json
+        import pathlib
+        import tempfile
         from unittest.mock import patch, Mock
         from api_client import _gpt_try_local_auth
         with tempfile.TemporaryDirectory() as td:

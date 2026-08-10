@@ -17,8 +17,8 @@
 - **跨窗口边框吸附**：可与 ETF Tracker 悬浮窗相互吸附，主屏和副屏均支持，并兼容不同 DPI 的显示器
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
-- **第三方用量 API 显示**：标题栏下拉菜单可切换 MiMo Token / API Usage 模式，支持配置第三方 Usage API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
-- **用量总览页面**：标题栏切换到“总览”后，在同一悬浮窗中并列显示 Token Plan 与 Usage API 的使用百分比和进度条
+- **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
+- **用量总览页面**：标题栏切换到“总览”后，并列显示 Token Plan、WLB 与 GPT 周限额的使用百分比和进度条
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 - **设置数据库 Git 同步**：程序启动时、窗口显示前拉取远端 `mimo-token-monitor/settings.db`，真正退出时仅提交并推送该文件；关闭到托盘不推送
 
@@ -63,7 +63,7 @@ python main.py
 3. 复制 Request Headers 中的 Cookie 值
 4. 粘贴到设置中
 
-### API Usage 设置（可选）
+### WLB 设置（可选）
 
 在设置中填写 **API Base URL** 和 **API Key** 后，可通过标题栏循环图标切换到第三方用量显示模式或“总览”页面：
 
@@ -71,6 +71,10 @@ python main.py
 - **API Key**：来自 CC Switch 的 API Key
 - 切换后悬浮窗显示剩余百分比、已用百分比、7 天窗口和状态
 - 未配置 API Key 时切换会显示提示，不会发送空请求
+
+### GPT 周限额
+
+总览会优先使用本机 Codex 登录信息查询 GPT 周限额，也可在设置中填写 ChatGPT Session Cookie 作为备用认证；本地 Codex 会话记录是最后兜底。网络、限流或服务端瞬时失败会自动重试一次；刷新仍失败时继续显示上次成功数据，并在 tooltip 中标明具体失败来源。
 
 ### 构建轻量启动器 EXE
 
@@ -92,7 +96,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - **拖动**：左键拖动窗口位置（除最小化按钮区域外）
 - **窗口吸附**：将 ETF Tracker 与 MiMo Token Monitor 的边框拖到约 15 个像素以内，会自动对齐左右/上下边框；两个窗口必须同时可见且未最小化，主屏和副屏均有效
 - **置顶按钮**：点击标题栏图钉图标切换置顶/取消置顶；图标高亮表示当前处于置顶状态，取消置顶时显示斜杠
-- **标题栏循环图标**：点击标题旁的图标，在 MiMo Token / API Usage / 总览之间循环切换；总览会同时展示两个已接入来源的进度
+- **标题栏循环图标**：点击标题旁的图标，在 MiMo Token / WLB / 总览之间循环切换；总览会同时展示三个已接入来源的进度
 - **双击悬浮窗**：立即刷新数据
 - **右键悬浮窗**：刷新 / 从浏览器导入 / 设置 / 查看原始数据 / 退出
 - **悬停悬浮窗**：显示详细 tooltip
@@ -176,9 +180,10 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 ## 隐私
 
-- 配置默认存于本地 SQLite，并按上文 Git 策略同步；快照文件本地存储；未启用 API Usage 时不请求第三方服务
+- 配置默认存于本地 SQLite，并按上文 Git 策略同步；快照文件本地存储。未配置 WLB API Key 时不会请求 WLB 服务
 - Cookie、API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
-- MiMo 请求发往 `platform.xiaomimimo.com`；启用 API Usage 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
+- MiMo 请求发往 `platform.xiaomimimo.com`；启用 WLB 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
+- GPT 周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源
 
 
 ### Git 同步超时

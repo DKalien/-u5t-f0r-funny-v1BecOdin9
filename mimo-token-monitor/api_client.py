@@ -219,6 +219,27 @@ GPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 GPT_AUTH_SESSION_URL = "https://chatgpt.com/api/auth/session"
 GPT_WEEKLY_WINDOW_SECONDS = 7 * 24 * 60 * 60
 
+
+def _gpt_get(url: str, headers: dict):
+    """对幂等的 GPT 用量请求重试一次瞬时失败。"""
+    for attempt in range(2):
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            if attempt:
+                raise
+            continue
+        if attempt == 0 and (response.status_code == 429 or response.status_code >= 500):
+            continue
+        return response
+
+
+def _gpt_failure(errors: list | None, source: str, reason: str):
+    if errors is not None:
+        errors.append(f"{source}: {reason}")
+    return None
+
+
 def _parse_gpt_secondary_window(data):
     """Extract weekly/secondary window fields from a ChatGPT usage response.
 
@@ -313,22 +334,32 @@ def fetch_gpt_weekly_usage(session_cookie=""):
     Returns: {ok, data: {used_percent, remaining_percent, reset_at,
              reset_after_seconds, source}, error}
     """
+    errors = []
     sources = [
-        (_gpt_try_local_auth, {}),
-        (_gpt_try_session_cookie, {"session_cookie": session_cookie}),
-        (_gpt_try_jsonl, {}),
+        ("本机 Codex 登录", _gpt_try_local_auth, {"errors": errors}),
+        ("ChatGPT Cookie", _gpt_try_session_cookie, {"session_cookie": session_cookie, "errors": errors}),
+        ("本地会话", _gpt_try_jsonl, {"errors": errors}),
     ]
-    for method, kwargs in sources:
+    for source, method, kwargs in sources:
         try:
             result = method(**kwargs)
             if result is not None:
                 return {"ok": True, "data": result, "error": None}
-        except Exception:
-            pass
+        except requests.exceptions.Timeout:
+            errors.append(f"{source}: 请求超时")
+        except requests.exceptions.ConnectionError:
+            errors.append(f"{source}: 网络连接失败")
+        except requests.exceptions.JSONDecodeError:
+            errors.append(f"{source}: 响应不是有效 JSON")
+        except requests.exceptions.RequestException:
+            errors.append(f"{source}: 网络请求失败")
+        except Exception as exc:
+            errors.append(f"{source}: {type(exc).__name__}")
 
-    return {"ok": False, "data": None, "error": "未找到 GPT 周限额数据"}
+    detail = "；".join(errors) if errors else "未找到可用数据源"
+    return {"ok": False, "data": None, "error": f"GPT 周限额刷新失败：{detail}"}
 
-def _gpt_try_local_auth():
+def _gpt_try_local_auth(errors=None):
     """Try reading access_token from local Codex auth.json and fetching usage."""
     home = _pl.Path.home()
     candidates = [
@@ -359,7 +390,7 @@ def _gpt_try_local_auth():
             break
 
     if not access_token:
-        return None
+        return _gpt_failure(errors, "本机 Codex 登录", "未找到登录令牌")
 
     hdrs = {
         "Authorization": f"Bearer {access_token}",
@@ -369,33 +400,34 @@ def _gpt_try_local_auth():
     if account_id:
         hdrs["ChatGPT-Account-ID"] = account_id
 
-    resp = requests.get(GPT_USAGE_URL, headers=hdrs, timeout=15)
+    resp = _gpt_get(GPT_USAGE_URL, hdrs)
     if resp.status_code != 200:
-        return None
+        reason = "登录已失效" if resp.status_code in {401, 403} else "用量接口请求失败"
+        return _gpt_failure(errors, "本机 Codex 登录", f"{reason}（HTTP {resp.status_code}）")
 
     data = resp.json()
     parsed = _parse_gpt_secondary_window(data)
     if parsed is None:
-        return None
+        return _gpt_failure(errors, "本机 Codex 登录", "响应中没有 7 天额度窗口")
 
     parsed["source"] = "local_codex_auth"
     return parsed
 
-def _gpt_try_session_cookie(session_cookie=""):
+def _gpt_try_session_cookie(session_cookie="", errors=None):
     """Two-step: exchange session cookie for access_token via GET, then fetch usage."""
     if not session_cookie or not session_cookie.strip():
-        return None
+        return _gpt_failure(errors, "ChatGPT Cookie", "未配置")
 
-    resp = requests.get(
+    resp = _gpt_get(
         GPT_AUTH_SESSION_URL,
-        headers={
+        {
             "Cookie": session_cookie,
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0",
         },
-        timeout=15,
     )
     if resp.status_code != 200:
-        return None
+        reason = "已失效" if resp.status_code in {401, 403} else "登录接口请求失败"
+        return _gpt_failure(errors, "ChatGPT Cookie", f"{reason}（HTTP {resp.status_code}）")
 
     auth_data = resp.json()
     if not isinstance(auth_data, dict):
@@ -403,7 +435,7 @@ def _gpt_try_session_cookie(session_cookie=""):
 
     access_token = auth_data.get("accessToken")
     if not access_token:
-        return None
+        return _gpt_failure(errors, "ChatGPT Cookie", "登录响应缺少访问令牌")
 
     account_id = None
     account = auth_data.get("account")
@@ -418,25 +450,26 @@ def _gpt_try_session_cookie(session_cookie=""):
     if account_id:
         hdrs["ChatGPT-Account-ID"] = account_id
 
-    resp2 = requests.get(GPT_USAGE_URL, headers=hdrs, timeout=15)
+    resp2 = _gpt_get(GPT_USAGE_URL, hdrs)
     if resp2.status_code != 200:
-        return None
+        reason = "登录已失效" if resp2.status_code in {401, 403} else "用量接口请求失败"
+        return _gpt_failure(errors, "ChatGPT Cookie", f"{reason}（HTTP {resp2.status_code}）")
 
     data = resp2.json()
     parsed = _parse_gpt_secondary_window(data)
     if parsed is None:
-        return None
+        return _gpt_failure(errors, "ChatGPT Cookie", "响应中没有 7 天额度窗口")
 
     parsed["source"] = "session_cookie"
     return parsed
 
 
-def _gpt_try_jsonl():
+def _gpt_try_jsonl(errors=None):
     """Try reading secondary window data from local Codex JSONL session files."""
     home = _pl.Path.home()
     sessions_dir = home / ".codex" / "sessions"
     if not sessions_dir.is_dir():
-        return None
+        return _gpt_failure(errors, "本地会话", "会话目录不存在")
 
     jsonl_files = sorted(
         sessions_dir.rglob("rollout-*.jsonl"),
@@ -465,4 +498,4 @@ def _gpt_try_jsonl():
         except Exception:
             continue
 
-    return None
+    return _gpt_failure(errors, "本地会话", "最近 10 个会话没有周限额记录")

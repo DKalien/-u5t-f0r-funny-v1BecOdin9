@@ -1,18 +1,18 @@
 import os
+import unittest
+from contextlib import contextmanager
+from unittest.mock import Mock, patch
 
 _ORIGINAL_QT_QPA_PLATFORM = os.environ.get("QT_QPA_PLATFORM")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import unittest
-from contextlib import contextmanager
-from unittest.mock import Mock, patch
-from PyQt6.QtCore import QEventLoop, QTimer
-from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import QEventLoop, QTimer  # noqa: E402
+from PyQt6.QtGui import QCloseEvent  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from data_sync import SyncResult, SyncStatus
-from sync_runtime import ExitSyncController, run_startup_sync
-from widget import TokenWidget
+from data_sync import SyncResult, SyncStatus  # noqa: E402
+from sync_runtime import ExitSyncController, run_startup_sync  # noqa: E402
+from widget import TokenWidget  # noqa: E402
 
 
 def tearDownModule():
@@ -127,8 +127,6 @@ class TestExitRuntime(unittest.TestCase):
         quit_callback.assert_called_once()
 
     def test_widget_true_quit_calls_callback_once(self):
-        from widget import TokenWidget
-
         callback = Mock()
         with managed_widget({"position": [100, 100]}, exit_callback=callback) as widget:
             widget._exit_callback = callback

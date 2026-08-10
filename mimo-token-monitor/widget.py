@@ -997,7 +997,12 @@ class TokenWidget(QWidget):
             self._gpt_data = result.get("data")
             self._gpt_error = ""
         else:
-            self._gpt_error = result.get("error", "GPT \u7528\u91cf\u67e5\u8be2\u5931\u8d25")
+            detail = result.get("error", "GPT \u7528\u91cf\u67e5\u8be2\u5931\u8d25")
+            self._gpt_error = (
+                f"刷新失败，继续显示上次数据：{detail}"
+                if self._gpt_data is not None
+                else detail
+            )
         self._refresh_error_state()
         self._last_update = datetime.now().strftime("%H:%M:%S")
         self._apply_overview_tooltip_if_needed()
