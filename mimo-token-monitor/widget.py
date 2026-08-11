@@ -283,7 +283,7 @@ class SettingsDialog(QDialog):
 
 # ── Main widget ─────────────────────────────────────────────────
 class TokenWidget(QWidget):
-    def __init__(self, cfg: dict, exit_callback=None, startup_sync_result=None):
+    def __init__(self, cfg: dict, exit_callback=None):
         super().__init__()
         self.cfg = cfg
         self._exit_callback = exit_callback
@@ -294,15 +294,15 @@ class TokenWidget(QWidget):
         self._mimo_error = ""
         self._tp_error = ""
         # GPT weekly usage state
-        self._gpt_data = None
+        self._gpt_data: dict | None = None
         self._gpt_error = ""
         self._last_update = "等待更新..."
         self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
-        self._router_worker = None
-        self._router_actions = []
+        self._router_worker: RouterWorker | None = None
+        self._router_actions: list[QAction] = []
 
         # Data from API
-        self._balance = None       # float, yuan
+        self._balance: float | None = None
         self._plan_total = 0       # total plan credits (limit)
         self._plan_used = 0        # total plan used
         self._month_used = 0       # this month used
@@ -311,13 +311,13 @@ class TokenWidget(QWidget):
         self._payg_tokens = 0
         self._payg_input = 0
         self._payg_output = 0
-        self._payg_total_cost = None
-        self._payg_month_cost = None
+        self._payg_total_cost: float | None = None
+        self._payg_month_cost: float | None = None
         # Daily usage
         self._daily_used = 0  # Today's token usage
 
         # Third-party usage state
-        self._tp_data = None
+        self._tp_data: dict | None = None
         self._switch_rect = QRect()
 
         # Always-on-top: controlled by cfg; default True for backward compat
@@ -348,9 +348,6 @@ class TokenWidget(QWidget):
         # 系统托盘
         self._setup_tray()
 
-        if startup_sync_result is not None and not startup_sync_result.ok:
-            QTimer.singleShot(0, lambda: self.show_sync_result(startup_sync_result))
-
         QTimer.singleShot(500, self._do_fetch)
 
     def _resolve_start_position(self, raw_position) -> tuple[int, int]:
@@ -370,11 +367,11 @@ class TokenWidget(QWidget):
             ):
                 return position
 
-        screen = QApplication.primaryScreen()
-        if screen is None:
+        primary_screen = QApplication.primaryScreen()
+        if primary_screen is None:
             return (100, 100)
 
-        available = screen.availableGeometry()
+        available = primary_screen.availableGeometry()
         margin = 20
         x = available.left() + min(
             100, max(0, available.width() - self.width() - margin)
@@ -536,7 +533,7 @@ class TokenWidget(QWidget):
             lambda _checked=False: self._start_router_operation("restart")
         )
         self._router_actions = [metadata_act, enable_act, disable_act, restart_act]
-        tray_menu.aboutToShow.connect(self._refresh_router_state)
+        tray_menu.aboutToHide.connect(self._refresh_router_state)
 
         tray_menu.addSeparator()
 
@@ -557,13 +554,11 @@ class TokenWidget(QWidget):
         self._tray_icon.activated.connect(self._on_tray_activated)
 
         self._tray_icon.show()
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self._refresh_router_state()
 
-    def _set_router_state(self, enabled: bool | None, *, checking=False):
-        state = (
-            "检测中…"
-            if checking
-            else "状态未知" if enabled is None else "已开启" if enabled else "已关闭"
-        )
+    def _set_router_state(self, enabled: bool | None):
+        state = "状态未知" if enabled is None else "已开启" if enabled else "已关闭"
         self._router_menu_action.setText(f"路由控制（{state}）")
 
     def _refresh_router_state(self):
@@ -571,9 +566,6 @@ class TokenWidget(QWidget):
             return
         if self._router_worker is not None and self._router_worker.isRunning():
             return
-        self._set_router_state(None, checking=True)
-        for action in self._router_actions:
-            action.setEnabled(False)
         self._router_worker = RouterWorker("status", self)
         self._router_worker.completed.connect(self._on_router_status_done)
         self._router_worker.start()
@@ -987,25 +979,31 @@ class TokenWidget(QWidget):
         has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
         has_gpt = bool(self.cfg.get("gpt_session_cookie", "").strip()) or (isinstance(self._gpt_data, dict) and self._gpt_data.get("used_percent") is not None)
 
-        rows = [
-            {
-                "name": "Token Plan",
-                "configured": has_cookie,
-                "percent": (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None,
-            },
-            {
-                "name": "WLB",
-                "configured": has_api_key,
-                "percent": self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None,
-            },
-            {
-                "name": "GPT \u5468\u9650\u989d",
-                "configured": has_gpt,
-                "percent": self._gpt_data.get("used_percent") if has_gpt and isinstance(self._gpt_data, dict) else None,
-            },
+        rows: list[tuple[str, bool, object]] = [
+            (
+                "Token Plan",
+                has_cookie,
+                (self._plan_used / self._plan_total * 100)
+                if has_cookie and self._plan_total > 0
+                else None,
+            ),
+            (
+                "WLB",
+                has_api_key,
+                self._tp_data.get("used_percent")
+                if has_api_key and self._tp_data is not None
+                else None,
+            ),
+            (
+                "GPT \u5468\u9650\u989d",
+                has_gpt,
+                self._gpt_data.get("used_percent")
+                if has_gpt and self._gpt_data is not None
+                else None,
+            ),
         ]
 
-        for idx, row in enumerate(rows):
+        for idx, (name, configured, raw_percent) in enumerate(rows):
             cell_x, label_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
 
             p.setPen(QPen(TEXT_COLOR))
@@ -1013,18 +1011,18 @@ class TokenWidget(QWidget):
             p.drawText(
                 label_rect,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                row["name"],
+                name,
             )
             p.drawText(
                 label_rect,
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                self._format_overview_percent(row["percent"], row["configured"]),
+                self._format_overview_percent(raw_percent, configured),
             )
 
             p.setBrush(QBrush(BAR_BG))
             p.drawRoundedRect(cell_x, bar_y, bar_w, bar_h, 4, 4)
 
-            percent = self._normalize_overview_percent(row["percent"])
+            percent = self._normalize_overview_percent(raw_percent)
             fraction = 0.0 if percent is None else percent / 100.0
             fill_w = int(bar_w * fraction)
             if fill_w > 0:
@@ -1279,17 +1277,8 @@ class TokenWidget(QWidget):
         self.activateWindow()
         self.raise_()
 
-    def show_sync_result(self, result):
-        """Show a non-blocking tray notification for a sync result."""
-        self._tray_icon.showMessage(
-            "MiMo 设置同步",
-            result.message,
-            QSystemTrayIcon.MessageIcon.Warning,
-            5000,
-        )
-
     def _quit_app(self, _checked=False, *, restart=False):
-        """真正退出应用程序；同步期间忽略重复请求。"""
+        """真正退出应用程序；退出请求发出后忽略重复请求。"""
         if self._exit_requested:
             return
         if self._router_worker is not None and self._router_worker.isRunning():

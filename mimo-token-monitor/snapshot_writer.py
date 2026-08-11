@@ -9,7 +9,7 @@ import tempfile
 from datetime import datetime, timezone
 
 
-def _format_tokens(n) -> str:
+def _format_tokens(n) -> str | None:
     """Format token count to human readable string."""
     if n is None:
         return None
@@ -23,7 +23,7 @@ def _format_tokens(n) -> str:
     return str(n)
 
 
-def _get_plan_tier_name(total: int) -> str:
+def _get_plan_tier_name(total: int) -> str | None:
     """Get plan tier name based on total tokens."""
     tiers = [
         (82_000_000_000, "Max"),

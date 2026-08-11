@@ -4,8 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 import unittest
 
-from code_sync import CODE_SYNC_RESULT_ENV
-from data_sync import SyncResult, SyncStatus
+from code_sync import CODE_SYNC_RESULT_ENV, SyncResult, SyncStatus
 from launcher import main, start_monitor
 from process_utils import hidden_subprocess_kwargs
 

@@ -7,13 +7,10 @@ from unittest.mock import Mock, patch
 _ORIGINAL_QT_QPA_PLATFORM = os.environ.get("QT_QPA_PLATFORM")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEventLoop, QTimer  # noqa: E402
 from PyQt6.QtGui import QCloseEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from data_sync import SyncResult, SyncStatus  # noqa: E402
 from router_control import RouterResult  # noqa: E402
-from sync_runtime import ExitSyncController, run_startup_sync  # noqa: E402
 from widget import TokenWidget  # noqa: E402
 
 
@@ -37,96 +34,24 @@ def managed_widget(cfg, **kwargs):
             QApplication.processEvents()
 
 
-class FakeService:
-    def __init__(self, result):
-        self.result = result
-        self.calls = []
-
-    def pull_remote_database(self):
-        self.calls.append("pull")
-        return self.result
-
-
 class TestStartupRuntime(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.app = QApplication.instance() or QApplication([])
-
-    def test_startup_sync_returns_worker_result(self):
-        expected = SyncResult(SyncStatus.SUCCESS, "pull", "ok")
-        service = FakeService(expected)
-        self.assertEqual(run_startup_sync(service, self.app), expected)
-        self.assertEqual(service.calls, ["pull"])
-
-    def test_startup_sync_sanitizes_worker_exception_detail(self):
-        class FailingService:
-            def pull_remote_database(self):
-                raise RuntimeError(
-                    "普通上下文 ssh://user:password@host token=abc "
-                    "Bearer secret-token"
-                )
-
-        result = run_startup_sync(FailingService(), self.app)
-
-        self.assertEqual(result.status, SyncStatus.FAILED)
-        self.assertIn("普通上下文", result.detail)
-        self.assertNotIn("password", result.detail)
-        self.assertNotIn("abc", result.detail)
-        self.assertNotIn("secret-token", result.detail)
-
     @patch("main.load_config", return_value={"cookie": "x"})
-    @patch("main.run_startup_sync")
-    def test_initialize_window_syncs_before_loading_config(self, run_sync, load_config):
+    def test_initialize_window_loads_local_config_before_showing(self, load_config):
         calls = []
-        run_sync.side_effect = lambda *args: calls.append("sync") or SyncResult(
-            SyncStatus.SUCCESS, "pull", "ok")
         load_config.side_effect = lambda: calls.append("load") or {"cookie": "x"}
         from main import initialize_window
         with patch("main.TokenWidget") as widget_type:
             widget_type.return_value.show = Mock(side_effect=lambda: calls.append("show"))
-            widget, result = initialize_window(self.app, Mock())
+            widget = initialize_window()
         self.assertIs(widget, widget_type.return_value)
-        self.assertEqual(result.status, SyncStatus.SUCCESS)
-        self.assertEqual(calls, ["sync", "load", "show"])
-
-
-class FakePushService:
-    def __init__(self, result):
-        self.result = result
-        self.calls = 0
-
-    def push_local_database(self):
-        self.calls += 1
-        return self.result
+        widget_type.assert_called_once_with({"cookie": "x"})
+        self.assertEqual(calls, ["load", "show"])
 
 
 class TestExitRuntime(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
-
-    def test_duplicate_exit_request_starts_one_push_and_quits_after_failure(self):
-        service = FakePushService(SyncResult(SyncStatus.FAILED, "push", "offline"))
-        quit_callback = Mock()
-        notify_callback = Mock()
-        controller = ExitSyncController(service, quit_callback, notify_callback)
-        loop = QEventLoop()
-        controller.finished.connect(lambda _result: loop.quit())
-
-        controller.request_exit()
-        controller.request_exit()
-        QTimer.singleShot(5000, loop.quit)
-        loop.exec()
-
-        self.assertEqual(service.calls, 1)
-        notify_callback.assert_called_once()
-        quit_callback.assert_called_once()
-
-    def test_no_service_quits_immediately(self):
-        quit_callback = Mock()
-        controller = ExitSyncController(None, quit_callback, Mock())
-        controller.request_exit()
-        quit_callback.assert_called_once()
 
     def test_widget_true_quit_calls_callback_once(self):
         callback = Mock()
@@ -193,7 +118,23 @@ class TestExitRuntime(unittest.TestCase):
 
             self.assertEqual(widget._router_menu_action.text(), "路由控制（已关闭）")
 
-    def test_restart_action_requests_synced_exit(self):
+    def test_router_status_refresh_keeps_visible_menu_stable(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            widget._set_router_state(True)
+            size_before = widget._tray_menu.sizeHint()
+            worker = Mock()
+            with patch("widget.RouterWorker", return_value=worker):
+                widget._refresh_router_state()
+            widget._on_router_status_done(
+                RouterResult(True, "路由已开启", route_enabled=True)
+            )
+
+            self.assertEqual(widget._router_menu_action.text(), "路由控制（已开启）")
+            self.assertEqual(widget._tray_menu.sizeHint(), size_before)
+            self.assertTrue(all(action.isEnabled() for action in widget._router_actions))
+            worker.start.assert_called_once()
+
+    def test_restart_action_requests_exit(self):
         callback = Mock()
         with managed_widget(
             {"position": [100, 100]}, exit_callback=callback
@@ -233,19 +174,6 @@ class TestLifecycleDegradation(unittest.TestCase):
     def setUpClass(cls):
         cls.app = QApplication.instance() or QApplication([])
 
-    @patch("main.load_config", return_value={"cookie": "configured"})
-    @patch("main.run_startup_sync", return_value=SyncResult(
-        SyncStatus.FAILED, "pull", "网络不可用"
-    ))
-    def test_failed_startup_sync_still_creates_widget(self, _sync, _load):
-        from main import initialize_window
-        with patch("main.TokenWidget") as widget_type:
-            widget_type.return_value.show = Mock()
-            widget, result = initialize_window(self.app, Mock())
-        self.assertIs(widget, widget_type.return_value)
-        widget_type.return_value.show.assert_called_once()
-        self.assertEqual(result.status, SyncStatus.FAILED)
-
     def test_close_event_hides_without_requesting_exit(self):
         callback = Mock()
         cfg = {"cookie": "x", "position": [100, 100], "refresh_interval": 300,
@@ -257,7 +185,7 @@ class TestLifecycleDegradation(unittest.TestCase):
         self.assertFalse(event.isAccepted())
         callback.assert_not_called()
 
-    def test_quit_action_requests_push_once(self):
+    def test_quit_action_requests_exit_once(self):
         callback = Mock()
         cfg = {"cookie": "x", "position": [100, 100], "refresh_interval": 300,
                "opacity": 0.85, "always_on_top": True}
@@ -285,32 +213,24 @@ class TestLifecycleDegradation(unittest.TestCase):
 
     @patch("main.save_config")
     @patch("main.load_config", return_value={})
-    @patch("main.run_startup_sync", return_value=SyncResult(
-        SyncStatus.SKIPPED, "config", "同步配置无效"
-    ))
     @patch("main.SettingsDialog")
-    def test_first_configuration_cancel_returns_safely(self, dialog_type, _sync, _load, save_config):
+    def test_first_configuration_cancel_returns_safely(
+        self, dialog_type, _load, save_config
+    ):
         from PyQt6.QtWidgets import QDialog
         from main import initialize_window
         dialog_type.return_value.exec.return_value = QDialog.DialogCode.Rejected
         with patch("main.TokenWidget") as widget_type:
-            widget, result = initialize_window(self.app, Mock())
+            widget = initialize_window()
         self.assertIsNone(widget)
-        self.assertEqual(result.status, SyncStatus.SKIPPED)
         widget_type.assert_not_called()
         dialog_type.assert_called_once_with({})
         dialog_type.return_value.setWindowTitle.assert_called_once_with("MiMo Token - 首次配置")
         save_config.assert_not_called()
 
-    @patch("main.run_startup_sync")
-    @patch("main.build_sync_service")
     @patch("main.activate_existing_instance")
     @patch("main.check_single_instance", return_value=None)
-    def test_duplicate_instance_returns_before_sync(
-        self, _check, activate, build_service, run_sync
-    ):
+    def test_duplicate_instance_returns_before_initialization(self, _check, activate):
         from main import main
         self.assertEqual(main(), 0)
         activate.assert_called_once()
-        build_service.assert_not_called()
-        run_sync.assert_not_called()

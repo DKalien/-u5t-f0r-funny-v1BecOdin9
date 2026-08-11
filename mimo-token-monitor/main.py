@@ -7,8 +7,6 @@ from PyQt6.QtCore import QProcess, QTimer
 from PyQt6.QtWidgets import QApplication, QDialog
 
 from config import load_config, save_config
-from data_sync import DataSyncService, SyncConfig, SyncResult, SyncStatus
-from sync_runtime import ExitSyncController, run_startup_sync
 from widget import SettingsDialog, TokenWidget
 
 MUTEX_NAME = "MiMoTokenMonitor_SingleInstance"
@@ -82,18 +80,7 @@ def restart_application() -> bool:
     )
     return started
 
-def build_sync_service() -> tuple[DataSyncService | None, SyncResult | None]:
-    try:
-        return DataSyncService(SyncConfig.from_environment()), None
-    except ValueError as exc:
-        return None, SyncResult(SyncStatus.SKIPPED, "config", str(exc))
-
-def initialize_window(app, service):
-    startup_result = (
-        run_startup_sync(service, app)
-        if service is not None
-        else SyncResult(SyncStatus.SKIPPED, "config", "同步配置无效")
-    )
+def initialize_window():
     cfg = load_config()
 
     if not cfg.get("cookie"):
@@ -103,19 +90,11 @@ def initialize_window(app, service):
             cfg = dlg.get_config()
             save_config(cfg)
         else:
-            return None, startup_result
+            return None
 
-    widget = TokenWidget(cfg, startup_sync_result=startup_result)
-    controller = ExitSyncController(
-        service,
-        widget.finish_quit,
-        widget.show_sync_result,
-        parent=widget,
-    )
-    widget._exit_callback = controller.request_exit
-    widget._exit_sync_controller = controller
+    widget = TokenWidget(cfg)
     widget.show()
-    return widget, startup_result
+    return widget
 
 def main() -> int:
     mutex = check_single_instance()
@@ -129,10 +108,7 @@ def main() -> int:
         app = QApplication(sys.argv)
         app.setQuitOnLastWindowClosed(False)
 
-        service, config_result = build_sync_service()
-        widget, startup_result = initialize_window(app, service)
-        if config_result is not None:
-            startup_result = config_result
+        widget = initialize_window()
         if widget is None:
             return 0
 

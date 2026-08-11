@@ -7,8 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from code_sync import CodeSyncConfig, CodeSyncService
-from data_sync import SyncStatus
+from code_sync import CodeSyncConfig, CodeSyncService, SyncStatus, sanitize_detail
 from process_utils import hidden_subprocess_kwargs
 
 
@@ -185,6 +184,15 @@ class TestCodeSync(unittest.TestCase):
             run_git(self.fixture.remote, "rev-parse", "refs/heads/main").stdout,
             run_git(self.fixture.repo, "rev-parse", "HEAD").stdout,
         )
+
+    def test_error_details_hide_credentials(self):
+        clean = sanitize_detail(
+            "ssh://user:password@example.test token=abc Bearer secret-token"
+        )
+
+        self.assertNotIn("password", clean)
+        self.assertNotIn("abc", clean)
+        self.assertNotIn("secret-token", clean)
 
 
 class TestHiddenSubprocessKwargs(unittest.TestCase):

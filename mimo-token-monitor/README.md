@@ -21,7 +21,7 @@ MiMo Token Plan、WLB 与 GPT 周限额用量监控桌面悬浮窗。
 - **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
 - **用量总览页面**：标题栏切换到“总览”后，并列显示 Token Plan、WLB 与 GPT 周限额的使用百分比和进度条
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
-- **设置数据库 Git 同步**：程序启动时、窗口显示前拉取远端 `mimo-token-monitor/settings.db`，退出或重启悬浮窗时仅提交并推送该文件；关闭到托盘不推送
+- **本地设置数据库**：配置保存在外置 SQLite 文件中，不通过 Git 或网络同步
 
 ## 使用方式
 
@@ -107,7 +107,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / 更新模型元数据 /
     路由控制 / 重启悬浮窗 / 退出
   - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；可开启、关闭或重启 Codex Router
-  - 重启悬浮窗：先按退出流程同步设置数据库，进程结束并释放单实例锁后再启动新实例
+  - 重启悬浮窗：退出当前进程并释放单实例锁后启动新实例
   - 悬停托盘图标：显示用量概览
 
 ### Codex Router 维护
@@ -118,8 +118,8 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   `node src/service.mjs restart`，更新失败时不会继续重启。
 - “开启路由”和“关闭路由”复用路由器的 `codex-router.ps1 enable|disable`，因此会
   同步调整 Codex 配置和后台服务；“重启路由器”只重启现有服务。
-- 打开托盘菜单时，程序会在后台调用 `node src/config-manager.mjs status`，根据其
-  `mode` 实时显示路由已开启或已关闭；检测失败时显示“状态未知”。
+- 程序启动后及关闭托盘菜单时，会在后台调用 `node src/config-manager.mjs status`，
+  缓存并在下次打开菜单时显示路由已开启或已关闭；检测失败时显示“状态未知”。
 - 所有操作均在后台线程执行。执行期间路由菜单会暂时禁用，完成后通过托盘通知结果；
   为避免中途销毁线程，操作完成前不能退出程序。
 - 路由器源码不在安装清单记录的位置时，可设置
@@ -136,7 +136,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - Python + PyQt6
 - 直接调用小米平台 REST API（`/api/v1/tokenPlan/usage`）
 - Cookie 认证，支持 CDP（Chrome DevTools Protocol）自动导入
-- 配置默认存储于外置 SQLite；Git 同步按上文策略仅操作 `mimo-token-monitor/settings.db`
+- 配置默认存储于本地外置 SQLite，不通过 Git 同步
 
 ## Claude HUD 集成
 
@@ -171,40 +171,23 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - claude-hud 每 ~300ms 读取快照并显示
 - 本程序关闭后，快照不再更新，claude-hud 在快照过期后停止显示 MIMO
 
-## 数据存储与跨设备同步
+## 数据存储
 
 - 配置默认存储在外置 SQLite 文件：`D:\python\data\mimo-token-monitor\settings.db`（单表 `settings`，每行一个配置键）。
-- 可通过环境变量 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖数据目录，适用于跨设备盘符/路径不一致的场景。
+- 可通过环境变量 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖本地数据目录。
 - 首次运行时，如果外置库无配置且旧文件 `~/.mimo-widget/config.json` 存在，会自动读取并迁移；旧文件保留，但不再作为主配置来源。
-- **敏感数据提示**：数据库中会包含 Cookie、API Key 等明文凭据，请勿将数据目录提交到公开仓库。
-
-### Git 同步策略
-
-- `D:\python\data` 必须是 Git 仓库，并配置可访问的默认远端分支 `origin/main`；可通过 `MIMO_TOKEN_MONITOR_GIT_REMOTE` 和 `MIMO_TOKEN_MONITOR_GIT_BRANCH` 覆盖远端名与分支名，认证沿用本机 Git/SSH 配置。
-- 启动时远端 `settings.db` 优先。远端文件通过 SQLite `PRAGMA quick_check` 后才会原子覆盖本地文件；同步失败时继续使用本地数据库。
-- 托盘或悬浮窗菜单中的“退出”以及托盘“重启悬浮窗”会推送；最小化到托盘不会推送。
-- 退出或重启时本机 `settings.db` 优先。远端并发更新时，程序基于最新远端 tree 重建提交，只替换 `mimo-token-monitor/settings.db`，保留其他目录的最新内容。
-- 退出流程不会提交或推送 `mimo-token-monitor` 源码；源码同步仅由轻量启动器在启动前执行安全快进拉取。
-- 推送失败时本地数据库保持不变，程序仍正常退出或继续重启。
-- 程序不会对共享仓库执行 `git pull`、`checkout`、`reset`、`clean` 或普通工作树提交，不会暂存或还原 `financial-data-backup`。
+- 数据库仅在本机读写，不执行 Git 拉取、提交或推送；轻量启动器的源码更新功能不受影响。
+- **敏感数据提示**：数据库中会包含 Cookie、API Key 等明文凭据，请勿手动加入 Git 或公开仓库。
 
 可用环境变量：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `MIMO_TOKEN_MONITOR_DATA_DIR` | `D:\python\data\mimo-token-monitor` | 数据目录；其父目录被视为仓库根目录 |
-| `MIMO_TOKEN_MONITOR_GIT_REMOTE` | `origin` | Git 远端名 |
-| `MIMO_TOKEN_MONITOR_GIT_BRANCH` | `main` | Git 分支名 |
-| `MIMO_TOKEN_MONITOR_GIT_TIMEOUT_SECONDS` | `30` | 每次启动/退出同步的总 Git 操作预算秒数 |
-| `MIMO_TOKEN_MONITOR_GIT_PUSH_RETRIES` | `3` | 最多 push 尝试次数；默认 `3` 表示首次尝试加最多 2 次重试 |
+| `MIMO_TOKEN_MONITOR_DATA_DIR` | `D:\python\data\mimo-token-monitor` | 本地数据目录 |
 
 ## 隐私
 
-- 配置默认存于本地 SQLite，并按上文 Git 策略同步；快照文件本地存储。未配置 WLB API Key 时不会请求 WLB 服务
+- 配置与快照文件仅在本地存储。未配置 WLB API Key 时不会请求 WLB 服务
 - Cookie、API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 WLB 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
 - GPT 周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源
-
-
-### Git 同步超时
-启动拉取和退出/重启推送各自使用一个总 operation deadline，默认 30 秒；该预算由本次操作的所有 Git 命令和推送重试共享，并非每条命令单独计时；本地 SQLite、文件写入等阶段在阶段完成后检查预算，不承诺抢占正在执行的系统调用。

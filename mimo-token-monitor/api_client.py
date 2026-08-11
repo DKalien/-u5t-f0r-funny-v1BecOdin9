@@ -41,7 +41,7 @@ def fetch_balance(cookie: str) -> dict:
         if resp.status_code >= 400:
             return {"ok": False, "balance": None, "error": f"HTTP {resp.status_code}"}
         data = resp.json()
-        balance = None
+        balance: int | float | str | None = None
         if isinstance(data, dict):
             d = data.get("data", data)
             if isinstance(d, (int, float)):

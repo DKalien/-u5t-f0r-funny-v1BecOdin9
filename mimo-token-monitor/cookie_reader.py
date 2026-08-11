@@ -130,7 +130,7 @@ def import_cookie_from_browser() -> tuple[str | None, str | None]:
 
     # 2. Fall back to browser_cookie3
     try:
-        import browser_cookie3
+        import browser_cookie3  # type: ignore[import-untyped]
     except ImportError:
         return None, (
             "自动读取需要以下任一条件：\n\n"

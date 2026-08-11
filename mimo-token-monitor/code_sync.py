@@ -1,27 +1,91 @@
-"""Synchronize the MiMo Token Monitor source project with its Git remote.
-
-The settings database has a separate, plumbing-only synchronizer.  This
-module intentionally handles only the source project directory and uses the
-normal working tree because pulling source code must update the files that the
-next application process will import.
-"""
+"""Synchronize the MiMo Token Monitor source project with its Git remote."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import time
 from typing import Callable
 
-from data_sync import GitCommandError, SyncResult, SyncStatus, sanitize_detail
 from process_utils import hidden_subprocess_kwargs
 
 _DEFAULT_PROJECT_PATH = "mimo-token-monitor"
 _CODE_COMMIT_MESSAGE = "chore(mimo-token-monitor): 同步代码更新"
 CODE_SYNC_RESULT_ENV = "MIMO_TOKEN_MONITOR_CODE_SYNC_RESULT"
+
+
+class GitCommandError(RuntimeError):
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.detail = sanitize_detail(detail)
+
+
+def sanitize_detail(detail: str) -> str:
+    clean = re.sub(
+        r"([A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:]+):([^\s/@]+)@",
+        r"\1***:***@",
+        detail,
+    )
+    clean = re.sub(
+        r"([A-Za-z][A-Za-z0-9+.-]*://)([^\s/@:]+)@",
+        r"\1***@",
+        clean,
+    )
+    sensitive_keys = (
+        "token|access_token|password|passwd|api_key|apikey|secret|credential|"
+        "auth|cookie|set-cookie|session|sessionid"
+    )
+    clean = re.sub(
+        r"(?i)(\b(?:cookie|set-cookie)\s*:\s*)[^\r\n]+",
+        r"\1***",
+        clean,
+    )
+    clean = re.sub(
+        r"(?i)(?<![\w])(remote\s+token)(\s+)[^\s,;&?#]+",
+        r"\1\2***",
+        clean,
+    )
+    clean = re.sub(
+        rf"(?i)(?<![\w])({sensitive_keys})(\s*[=:]\s*)[^\s,;&?#]+",
+        r"\1\2***",
+        clean,
+    )
+    clean = re.sub(
+        rf"(?i)([?#&](?:{sensitive_keys})=)[^&#\s]+",
+        r"\1***",
+        clean,
+    )
+    clean = re.sub(
+        r"(Authorization:\s*Bearer\s+|(?<![\w])Bearer\s+)[^\s,;]+",
+        r"\1***",
+        clean,
+        flags=re.I,
+    )
+    return clean[-2000:]
+
+
+class SyncStatus(str, Enum):
+    SUCCESS = "success"
+    NO_CHANGE = "no_change"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    status: SyncStatus
+    stage: str
+    message: str
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status in {SyncStatus.SUCCESS, SyncStatus.NO_CHANGE}
 
 
 def _nonempty_env(name: str, default: str) -> str:
