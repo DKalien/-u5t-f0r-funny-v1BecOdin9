@@ -119,11 +119,16 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - “开启路由”和“关闭路由”复用路由器的 `codex-router.ps1 enable|disable`，因此会
   同步调整 Codex 配置和后台服务；“重启路由器”只重启现有服务。
 - 程序启动后及关闭托盘菜单时，会在后台调用 `node src/config-manager.mjs status`，
-  缓存并在下次打开菜单时显示路由已开启或已关闭；检测失败时显示“状态未知”。
-- 所有操作均在后台线程执行。执行期间路由菜单会暂时禁用，完成后通过托盘通知结果；
-  为避免中途销毁线程，操作完成前不能退出程序。
-- 路由器源码不在安装清单记录的位置时，可设置
-  `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 指向有效的 Codex Router 项目根目录。
+  缓存并在下次打开菜单时显示路由已开启或已关闭；检测失败时显示“状态未知”。菜单
+  关闭后的状态刷新会延迟到事件循环下一轮，避免点击启停后被旧状态刷新竞态覆盖。
+- 所有操作均在后台线程执行。执行期间路由菜单会暂时禁用；悬浮窗底部显示“正在…”状态，
+  完成后显示成功或失败摘要并在 5 秒后清除，同时保留托盘通知。为避免中途销毁线程，
+  操作完成前不能退出程序。
+- 路由源码根目录优先取 `MIMO_TOKEN_MONITOR_ROUTER_ROOT`；未设置时读取 `$CODEX_HOME`
+  （默认 `~/.codex`）下 `codex-router/install-manifest.json` 的
+  `current.sourceRoot`，并校验所需入口文件。状态使用 `node src/config-manager.mjs status`，
+  更新元数据使用 `node src/catalog.mjs` 后重启服务，启停使用
+  `codex-router.ps1 enable|disable`，重启使用 `node src/service.mjs restart`。
 
 ### 多屏吸附说明
 

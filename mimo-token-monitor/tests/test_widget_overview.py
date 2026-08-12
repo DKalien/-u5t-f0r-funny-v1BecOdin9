@@ -45,6 +45,7 @@ from widget import (  # noqa: E402
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT,
 )
+from router_control import RouterResult  # noqa: E402
 
 
 def _make_widget(**overrides):
@@ -437,6 +438,46 @@ class TestOverviewRenderSmoke(unittest.TestCase):
         painted_texts = [call.args[-1] for call in painter.drawText.call_args_list]
         self.assertIn("WLB 请求失败", painted_texts)
         self.assertIn("更新于 12:00:00", painted_texts)
+        w.close()
+
+
+class TestRouterStatusDisplay(unittest.TestCase):
+    def test_router_operation_start_status_labels(self):
+        expected = {
+            "refresh": "正在更新模型元数据",
+            "enable": "正在开启路由",
+            "disable": "正在关闭路由",
+            "restart": "正在重启路由器",
+        }
+        for operation, label in expected.items():
+            with self.subTest(operation=operation):
+                w = _make_widget()
+                w._router_worker = None
+                worker = Mock()
+                worker.isRunning.return_value = False
+                w._tray_icon.showMessage = Mock()
+                with patch("widget.RouterWorker", return_value=worker):
+                    w._start_router_operation(operation)
+                self.assertEqual(w._router_status, label)
+                worker.start.assert_called_once()
+                w.close()
+
+    def test_router_status_uses_short_summary_and_refreshes_paint(self):
+        w = _make_widget()
+        w.update = Mock()
+        w._router_worker = Mock()
+        w._on_router_operation_done(
+            RouterResult(False, "关闭路由失败", "敏感的长错误详情" * 50)
+        )
+
+        self.assertEqual(w._router_status, "关闭路由失败")
+        self.assertNotIn("敏感的长错误详情", w._router_status)
+        self.assertFalse(w._router_status_ok)
+        w.update.assert_called_once()
+        self.assertTrue(w._router_status_timer.isActive())
+        w._clear_router_status()
+        self.assertEqual(w._router_status, "")
+        self.assertIsNone(w._router_status_ok)
         w.close()
 
 

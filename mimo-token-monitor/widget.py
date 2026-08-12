@@ -297,6 +297,11 @@ class TokenWidget(QWidget):
         self._gpt_data: dict | None = None
         self._gpt_error = ""
         self._last_update = "等待更新..."
+        self._router_status = ""
+        self._router_status_ok: bool | None = None
+        self._router_status_timer = QTimer(self)
+        self._router_status_timer.setSingleShot(True)
+        self._router_status_timer.timeout.connect(self._clear_router_status)
         self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
         self._router_worker: RouterWorker | None = None
         self._router_actions: list[QAction] = []
@@ -533,7 +538,9 @@ class TokenWidget(QWidget):
             lambda _checked=False: self._start_router_operation("restart")
         )
         self._router_actions = [metadata_act, enable_act, disable_act, restart_act]
-        tray_menu.aboutToHide.connect(self._refresh_router_state)
+        tray_menu.aboutToHide.connect(
+            lambda: QTimer.singleShot(0, self._refresh_router_state)
+        )
 
         tray_menu.addSeparator()
 
@@ -583,6 +590,23 @@ class TokenWidget(QWidget):
         self._finish_router_worker()
         self._set_router_state(result.route_enabled if result.ok else None)
 
+    def _set_router_status(
+        self, message: str, ok: bool | None = None, clear_after: int = 0
+    ):
+        self._router_status_timer.stop()
+        self._router_status = str(message).splitlines()[0][:120]
+        self._router_status_ok = ok
+        if clear_after > 0:
+            self._router_status_timer.start(clear_after)
+        self.update()
+
+    def _clear_router_status(self):
+        if not self._router_status:
+            return
+        self._router_status = ""
+        self._router_status_ok = None
+        self.update()
+
     def _start_router_operation(self, operation: str):
         if self._exit_requested:
             return
@@ -609,6 +633,9 @@ class TokenWidget(QWidget):
             QSystemTrayIcon.MessageIcon.Information,
             2000,
         )
+        self._set_router_status(
+            labels.get(operation, "正在执行路由操作...").rstrip(".")
+        )
         self._router_worker = RouterWorker(operation, self)
         self._router_worker.completed.connect(self._on_router_operation_done)
         self._router_worker.start()
@@ -619,6 +646,9 @@ class TokenWidget(QWidget):
             self._set_router_state(result.route_enabled)
         elif not result.ok:
             self._set_router_state(None)
+
+        summary = result.message or ("路由操作成功" if result.ok else "路由操作失败")
+        self._set_router_status(summary, result.ok, clear_after=5000)
 
         message = result.message
         if result.detail:
@@ -764,11 +794,21 @@ class TokenWidget(QWidget):
         p.setFont(font_tiny)
         update_text = f"更新于 {self._last_update}"
         update_x = max(16, self.width() - 16 - p.fontMetrics().horizontalAdvance(update_text))
-        if self._last_error:
-            p.setPen(QPen(ACCENT_RED))
+        status_text = self._router_status or self._last_error
+        if status_text:
+            status_color = (
+                ACCENT_GREEN
+                if self._router_status and self._router_status_ok is True
+                else ACCENT_RED
+                if self._router_status and self._router_status_ok is False
+                else ACCENT_YELLOW
+                if self._router_status
+                else ACCENT_RED
+            )
+            p.setPen(QPen(status_color))
             error_width = max(0, update_x - 22)
             error_text = p.fontMetrics().elidedText(
-                self._last_error,
+                status_text,
                 Qt.TextElideMode.ElideRight,
                 error_width,
             )

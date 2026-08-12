@@ -134,6 +134,32 @@ class TestExitRuntime(unittest.TestCase):
             self.assertTrue(all(action.isEnabled() for action in widget._router_actions))
             worker.start.assert_called_once()
 
+    def test_router_action_starts_before_deferred_menu_refresh(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            widget._router_worker = None
+            worker = Mock()
+            worker.isRunning.return_value = True
+            widget._tray_icon.showMessage = Mock()
+            router_menu = next(
+                action.menu()
+                for action in widget._tray_menu.actions()
+                if action.text() == "路由控制（状态未知）"
+            )
+            enable_action = next(
+                action
+                for action in router_menu.actions()
+                if action.text() == "开启路由"
+            )
+
+            with patch("widget.RouterWorker", return_value=worker) as worker_type:
+                widget._tray_menu.aboutToHide.emit()
+                enable_action.trigger()
+                QApplication.processEvents()
+
+            worker_type.assert_called_once_with("enable", widget)
+            worker.start.assert_called_once()
+            self.assertIs(widget._router_worker, worker)
+
     def test_restart_action_requests_exit(self):
         callback = Mock()
         with managed_widget(
