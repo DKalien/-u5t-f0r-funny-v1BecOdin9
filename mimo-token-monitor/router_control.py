@@ -126,6 +126,7 @@ def run_router_operation(
                 cwd=root,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 timeout=timeout_seconds,
                 check=False,
                 **hidden_subprocess_kwargs(),

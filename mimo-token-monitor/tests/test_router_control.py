@@ -65,6 +65,9 @@ class TestRouterControl(unittest.TestCase):
                 ],
             )
             self.assertTrue(all(call[1]["cwd"] == root.resolve() for call in calls))
+            self.assertTrue(
+                all(call[1]["stdin"] == subprocess.DEVNULL for call in calls)
+            )
 
     def test_failure_stops_before_restart(self):
         with tempfile.TemporaryDirectory() as tmp:
