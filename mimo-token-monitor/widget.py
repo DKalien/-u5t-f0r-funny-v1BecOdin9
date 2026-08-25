@@ -13,6 +13,7 @@ import sys
 import api_client
 from config import save_config
 import cookie_reader
+import playwright_session
 import router_control
 import snapshot_writer
 import window_snap
@@ -120,6 +121,28 @@ class FetchWorker(QThread):
         self.finished.emit(bal, usage)
 
 
+class PlaywrightCookieWorker(QThread):
+    """Refresh the persistent Playwright session away from the UI thread."""
+
+    finished = pyqtSignal(object, object, bool)
+
+    def __init__(self, interactive: bool = False, parent=None):
+        super().__init__(parent)
+        self.interactive = interactive
+
+    def run(self):
+        cookie, error = playwright_session.refresh_cookie(
+            interactive=self.interactive,
+            timeout_seconds=180 if self.interactive else 30,
+        )
+        if cookie:
+            result = api_client.fetch_balance(cookie)
+            if not result.get("ok"):
+                error = result.get("error") or "Cookie 验证失败"
+                cookie = None
+        self.finished.emit(cookie, error, self.interactive)
+
+
 
 # ── Third-party usage probe thread ──────────────────────────────
 class ThirdPartyFetchWorker(QThread):
@@ -167,7 +190,7 @@ class SettingsDialog(QDialog):
     def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MiMo Token 设置")
-        self.setFixedSize(500, 520)
+        self.setFixedSize(500, 600)
         self.cfg = dict(cfg)
 
         layout = QFormLayout(self)
@@ -190,6 +213,17 @@ class SettingsDialog(QDialog):
         self.interval_spin.setValue(cfg.get("refresh_interval", 300))
         self.interval_spin.setSuffix(" 秒")
         layout.addRow("刷新间隔:", self.interval_spin)
+
+        self.playwright_check = QCheckBox("Playwright 自动续期")
+        self.playwright_check.setChecked(cfg.get("playwright_auto_refresh", True))
+        layout.addRow("登录保持:", self.playwright_check)
+
+        self.playwright_interval_spin = QSpinBox()
+        self.playwright_interval_spin.setRange(3600, 86400)
+        self.playwright_interval_spin.setSingleStep(3600)
+        self.playwright_interval_spin.setValue(cfg.get("playwright_refresh_interval", 21600))
+        self.playwright_interval_spin.setSuffix(" 秒")
+        layout.addRow("续期间隔:", self.playwright_interval_spin)
 
         self.opacity_spin = QDoubleSpinBox()
         self.opacity_spin.setRange(0.3, 1.0)
@@ -226,6 +260,7 @@ class SettingsDialog(QDialog):
         hint = QLabel(
             "自动导入: Edge 快捷方式末尾加 --remote-debugging-port=9222 --remote-allow-origins=*，重启浏览器后点击按钮\n"
             "手动导入: F12 → Network → 刷新页面 → 点任意请求 → 复制 Cookie 头\n\n"
+            "Playwright 自动续期: 使用独立浏览器配置定时刷新登录状态；首次或失效时可能需要验证码\n"
             "有效期至: 手动填写套餐到期日期，例如 2026-08-31\n"
             "快照路径: 填写后会生成 JSON 供 claude-hud 读取显示用量\n"
             "WLB: 填写 Base URL 和 API Key 后可点击标题栏切换图标显示第三方用量\n"
@@ -271,6 +306,8 @@ class SettingsDialog(QDialog):
     def get_config(self) -> dict:
         self.cfg["cookie"] = self.cookie_edit.text().strip()
         self.cfg["refresh_interval"] = self.interval_spin.value()
+        self.cfg["playwright_auto_refresh"] = self.playwright_check.isChecked()
+        self.cfg["playwright_refresh_interval"] = self.playwright_interval_spin.value()
         self.cfg["opacity"] = self.opacity_spin.value()
         self.cfg["expiry_date"] = self.expiry_edit.text().strip()
         self.cfg["expiry_alert_enabled"] = self.expiry_alert_check.isChecked()
@@ -305,6 +342,10 @@ class TokenWidget(QWidget):
         self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
         self._router_worker: RouterWorker | None = None
         self._router_actions: list[QAction] = []
+        self._playwright_worker: PlaywrightCookieWorker | None = None
+        self._playwright_timer = QTimer(self)
+        self._playwright_timer.timeout.connect(self._refresh_playwright_cookie)
+        self._playwright_recovery_attempted = False
 
         # Data from API
         self._balance: float | None = None
@@ -349,6 +390,11 @@ class TokenWidget(QWidget):
         self._timer.timeout.connect(self._do_fetch)
         interval_ms = cfg.get("refresh_interval", 300) * 1000
         self._timer.start(interval_ms)
+        if cfg.get("playwright_auto_refresh", True):
+            playwright_interval_ms = max(
+                3600, int(cfg.get("playwright_refresh_interval", 21600))
+            ) * 1000
+            self._playwright_timer.start(playwright_interval_ms)
 
         # 系统托盘
         self._setup_tray()
@@ -513,6 +559,12 @@ class TokenWidget(QWidget):
         import_act = QAction("从浏览器导入", self)
         import_act.triggered.connect(self._import_cookie_quick)
         tray_menu.addAction(import_act)
+
+        renew_act = QAction("Playwright 续期", self)
+        renew_act.triggered.connect(
+            lambda _checked=False: self._refresh_playwright_cookie(interactive=True)
+        )
+        tray_menu.addAction(renew_act)
 
         tray_menu.addSeparator()
 
@@ -1333,6 +1385,9 @@ class TokenWidget(QWidget):
         self._exit_requested = True
         self.setEnabled(False)
         self._timer.stop()
+        self._playwright_timer.stop()
+        if self._playwright_worker is not None and self._playwright_worker.isRunning():
+            self._playwright_worker.wait(5000)
         if self._exit_callback is not None:
             self._exit_callback()
         else:
@@ -1352,6 +1407,12 @@ class TokenWidget(QWidget):
         import_act = QAction("从浏览器导入", self)
         import_act.triggered.connect(self._import_cookie_quick)
         menu.addAction(import_act)
+
+        renew_act = QAction("Playwright 续期", self)
+        renew_act.triggered.connect(
+            lambda _checked=False: self._refresh_playwright_cookie(interactive=True)
+        )
+        menu.addAction(renew_act)
 
         settings_act = QAction("设置", self)
         settings_act.triggered.connect(self._open_settings)
@@ -1384,6 +1445,7 @@ class TokenWidget(QWidget):
         if result["ok"]:
             # 保存到配置并刷新
             self.cfg["cookie"] = cookie_str
+            self._playwright_recovery_attempted = False
             save_config(self.cfg)
             QMessageBox.information(self, "导入成功", "Cookie 已从浏览器读取并验证有效，正在刷新数据...")
             self._do_fetch()
@@ -1402,6 +1464,42 @@ class TokenWidget(QWidget):
                 f"Cookie 已读取，但验证时出错：{result.get('error', '未知错误')}\n已保存，请手动确认",
             )
             self._do_fetch()
+
+    def _refresh_playwright_cookie(self, interactive: bool = False):
+        """Refresh the isolated Playwright login and replace the saved Cookie."""
+        if self._exit_requested:
+            return
+        if not interactive and not self.cfg.get("playwright_auto_refresh", True):
+            return
+        if self._playwright_worker is not None and self._playwright_worker.isRunning():
+            return
+
+        self._playwright_worker = PlaywrightCookieWorker(interactive, self)
+        self._playwright_worker.finished.connect(self._on_playwright_cookie_done)
+        self._playwright_worker.start()
+
+    def _on_playwright_cookie_done(self, cookie, error, interactive: bool):
+        worker = self._playwright_worker
+        self._playwright_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+        if cookie:
+            self.cfg["cookie"] = cookie
+            self._playwright_recovery_attempted = False
+            save_config(self.cfg)
+            self._mimo_error = ""
+            if interactive:
+                QMessageBox.information(self, "Playwright 续期成功", "登录状态已更新，正在刷新用量。")
+            self._do_fetch()
+            return
+
+        if interactive:
+            QMessageBox.warning(
+                self,
+                "Playwright 续期失败",
+                error or "无法刷新登录状态，请在打开的浏览器中完成登录或验证码验证。",
+            )
 
     # ── Fetch ───────────────────────────────────────────────────
     def _do_fetch(self):
@@ -1447,6 +1545,18 @@ class TokenWidget(QWidget):
             self._mimo_error = usage_result.get("error", "用量查询失败")
         else:
             self._mimo_error = ""
+        expired = any(
+            "过期" in str(result.get("error") or "")
+            for result in (bal_result, usage_result)
+            if isinstance(result, dict)
+        )
+        if (
+            expired
+            and self.cfg.get("playwright_auto_refresh", True)
+            and not self._playwright_recovery_attempted
+        ):
+            self._playwright_recovery_attempted = True
+            self._refresh_playwright_cookie(interactive=True)
         self._refresh_error_state()
 
         # Parse balance
@@ -1595,6 +1705,11 @@ class TokenWidget(QWidget):
             self.update()
             interval_ms = self.cfg.get("refresh_interval", 300) * 1000
             self._timer.setInterval(interval_ms)
+            self._playwright_timer.stop()
+            if self.cfg.get("playwright_auto_refresh", True):
+                self._playwright_timer.start(
+                    max(3600, int(self.cfg.get("playwright_refresh_interval", 21600))) * 1000
+                )
             self._do_fetch()
 
     def _show_debug(self):

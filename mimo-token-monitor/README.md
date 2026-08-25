@@ -9,6 +9,7 @@ MiMo Token Plan、WLB 与 GPT 周限额用量监控桌面悬浮窗。
 - 根据套餐总额自动匹配挡位（Lite/Standard/Pro/Max），显示已用额度折合金额
 - 余额为 0 时自动隐藏余额显示
 - **一键导入 Cookie**：通过 CDP 自动从浏览器读取，无需手动复制
+- **Playwright 自动续期**：使用独立浏览器配置定时刷新登录状态，减少重复登录
 - 自动读取小米平台 API 获取真实数据
 - 进度条颜色随用量变化（绿→黄→红）
 - 支持手动填写套餐有效期并显示“有效期至”
@@ -46,6 +47,21 @@ python main.py
 ```
 
 首次运行需要填入 Cookie。
+
+### Playwright 自动续期（可选）
+
+设置中的“Playwright 自动续期”默认开启，默认每 6 小时打开一次 MiMo 页面并从独立的
+`playwright-profile` 配置读取最新 Cookie。首次使用需要安装浏览器运行时：
+
+```bash
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+```
+
+该配置目录位于 `MIMO_TOKEN_MONITOR_DATA_DIR` 下，不使用也不修改现有 Edge/Chrome 用户目录。
+该目录包含登录状态，请勿复制给他人或提交到 Git。
+如果服务端 Cookie 已硬过期，程序会打开 Playwright 浏览器并等待用户完成登录或验证码；验证码
+仍然需要人工输入。Playwright 不能延长服务端设置的 Cookie 有效期。
 
 **方式一：一键导入（推荐）**
 

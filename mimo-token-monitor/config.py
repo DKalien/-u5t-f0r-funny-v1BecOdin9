@@ -19,6 +19,8 @@ DEFAULT_CONFIG = {
     "third_party_api_key": "",
     "gpt_session_cookie": "",
     "display_mode": "mimo",
+    "playwright_auto_refresh": True,
+    "playwright_refresh_interval": 21600,
 }
 
 # Default external project data directory (Windows path by design).
@@ -53,6 +55,11 @@ def _project_data_dir() -> str:
 
 def _db_path() -> str:
     return os.path.join(_project_data_dir(), _DB_NAME)
+
+
+def playwright_user_data_dir() -> str:
+    """Return the isolated browser profile used for Playwright renewal."""
+    return os.path.join(_project_data_dir(), "playwright-profile")
 
 
 def _ensure_db(conn: sqlite3.Connection) -> None:
