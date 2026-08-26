@@ -138,14 +138,21 @@ class PlaywrightCookieWorker(QThread):
 
     finished = pyqtSignal(object, object, bool)
 
-    def __init__(self, interactive: bool = False, parent=None):
+    def __init__(
+        self,
+        interactive: bool = False,
+        previous_cookie: str | None = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.interactive = interactive
+        self.previous_cookie = previous_cookie
 
     def run(self):
         cookie, error = playwright_session.refresh_cookie(
             interactive=self.interactive,
             timeout_seconds=180 if self.interactive else 30,
+            previous_cookie=self.previous_cookie,
         )
         if cookie:
             result = api_client.fetch_balance(cookie)
@@ -1573,7 +1580,11 @@ class TokenWidget(QWidget):
             )
             self._do_fetch()
 
-    def _refresh_playwright_cookie(self, interactive: bool = False):
+    def _refresh_playwright_cookie(
+        self,
+        interactive: bool = False,
+        require_cookie_change: bool = False,
+    ):
         """Refresh the isolated Playwright login and replace the saved Cookie."""
         if self._exit_requested:
             return
@@ -1582,7 +1593,12 @@ class TokenWidget(QWidget):
         if self._playwright_worker is not None and self._playwright_worker.isRunning():
             return
 
-        self._playwright_worker = PlaywrightCookieWorker(interactive, self)
+        previous_cookie = self.cfg.get("cookie", "") if require_cookie_change else None
+        self._playwright_worker = PlaywrightCookieWorker(
+            interactive,
+            previous_cookie,
+            self,
+        )
         self._playwright_worker.finished.connect(self._on_playwright_cookie_done)
         self._playwright_worker.start()
 
@@ -1607,6 +1623,15 @@ class TokenWidget(QWidget):
                 self,
                 "Playwright 续期失败",
                 error or "无法刷新登录状态，请在打开的浏览器中完成登录或验证码验证。",
+            )
+        elif (
+            "过期" in str(error or "")
+            and not self._playwright_recovery_attempted
+        ):
+            self._playwright_recovery_attempted = True
+            self._refresh_playwright_cookie(
+                interactive=True,
+                require_cookie_change=True,
             )
 
     # ── Fetch ───────────────────────────────────────────────────
@@ -1664,7 +1689,10 @@ class TokenWidget(QWidget):
             and not self._playwright_recovery_attempted
         ):
             self._playwright_recovery_attempted = True
-            self._refresh_playwright_cookie(interactive=True)
+            self._refresh_playwright_cookie(
+                interactive=True,
+                require_cookie_change=True,
+            )
         self._refresh_error_state()
 
         # Parse balance

@@ -10,9 +10,13 @@ from playwright_session import PlaywrightSession, PlaywrightSessionError, refres
 class _FakePage:
     def __init__(self):
         self.goto_calls = []
+        self.wait_calls = []
 
     def goto(self, *args, **kwargs):
         self.goto_calls.append((args, kwargs))
+
+    def wait_for_timeout(self, timeout):
+        self.wait_calls.append(timeout)
 
 
 class _FakeContext:
@@ -148,7 +152,11 @@ class TestPlaywrightSession(unittest.TestCase):
 
         self.assertEqual(result, ("mimo_token=SECRET_COOKIE", None))
         session_type.assert_called_once_with("C:/isolated/mimo-profile", headless=False)
-        session.refresh_cookie.assert_called_once_with(interactive=True, timeout_seconds=12)
+        session.refresh_cookie.assert_called_once_with(
+            interactive=True,
+            timeout_seconds=12,
+            previous_cookie=None,
+        )
         session.close.assert_called_once_with()
 
     def test_refresh_cookie_returns_clear_error_without_cookie(self):
@@ -170,19 +178,30 @@ class TestPlaywrightSession(unittest.TestCase):
     def test_interactive_refresh_waits_for_login_cookie(self):
         session = PlaywrightSession(tempfile.mkdtemp())
         session.open_mimo = Mock()
-        session.get_cookie = Mock(
-            side_effect=[
-                PlaywrightSessionError("未找到 xiaomimimo.com Cookie"),
-                "session_id=ready",
-            ]
-        )
+        session.get_cookie = Mock(side_effect=["session_id=stale", "session_id=ready"])
         with patch("playwright_session.time.sleep") as sleep:
             with patch("playwright_session.time.monotonic", side_effect=[0, 0, 1]):
                 self.assertEqual(
-                    session.refresh_cookie(interactive=True, timeout_seconds=10),
+                    session.refresh_cookie(
+                        interactive=True,
+                        timeout_seconds=10,
+                        previous_cookie="session_id=stale",
+                    ),
                     "session_id=ready",
                 )
         sleep.assert_called_once_with(1)
+
+    def test_refresh_visits_protected_console_and_waits_for_frontend(self):
+        session = PlaywrightSession(tempfile.mkdtemp(), headless=True)
+        page = _FakePage()
+        session.open_mimo = Mock(return_value=page)
+        session.get_cookie = Mock(return_value="session_id=ready")
+
+        self.assertEqual(session.refresh_cookie(timeout_seconds=10), "session_id=ready")
+
+        session.open_mimo.assert_called_once_with(timeout=10_000)
+        self.assertEqual(page.wait_calls, [3000])
+        self.assertEqual(playwright_session.MIMO_URL, "https://platform.xiaomimimo.com/#/console/balance")
 
 
 if __name__ == "__main__":

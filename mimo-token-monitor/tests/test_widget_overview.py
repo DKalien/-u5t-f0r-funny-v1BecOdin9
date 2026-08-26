@@ -161,6 +161,7 @@ class TestOverviewFetchDispatch(unittest.TestCase):
         self.assertEqual(calls, ["mimo", "third_party", "gpt"])
         w.close()
 
+
     def test_refresh_attempt_updates_timestamp_before_dispatch(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         calls = []
@@ -186,6 +187,23 @@ class TestOverviewFetchDispatch(unittest.TestCase):
     def test_configured_refresh_interval_is_applied_to_timer(self):
         w = _make_widget(refresh_interval=3600)
         self.assertEqual(w._timer.interval(), 3_600_000)
+        w.close()
+
+
+class TestPlaywrightRecovery(unittest.TestCase):
+    def test_expired_api_cookie_requires_a_changed_playwright_cookie(self):
+        w = _make_widget(cookie="stale", playwright_auto_refresh=True)
+        w._refresh_playwright_cookie = Mock()
+
+        w._on_fetch_done(
+            {"ok": False, "balance": None, "error": "Cookie 已过期，请重新获取"},
+            {"ok": False, "data": None, "error": "Cookie 已过期，请重新获取"},
+        )
+
+        w._refresh_playwright_cookie.assert_called_once_with(
+            interactive=True,
+            require_cookie_change=True,
+        )
         w.close()
 
 

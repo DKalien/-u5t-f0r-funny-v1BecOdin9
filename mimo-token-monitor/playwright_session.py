@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-MIMO_URL = "https://platform.xiaomimimo.com/"
+MIMO_URL = "https://platform.xiaomimimo.com/#/console/balance"
 TARGET_URL = MIMO_URL
 COOKIE_DOMAIN = "xiaomimimo.com"
 DEFAULT_USER_DATA_DIR = Path(tempfile.gettempdir()) / "mimo-token-monitor-playwright"
@@ -144,25 +144,31 @@ class PlaywrightSession:
         *,
         interactive: bool = False,
         timeout_seconds: int = 30,
+        previous_cookie: str | None = None,
     ) -> str:
-        """打开 MiMo 页面并读取 Cookie；interactive 模式显示浏览器窗口。"""
+        """访问受保护控制台并读取 Cookie；可等待旧 Cookie 被替换。"""
         if timeout_seconds <= 0:
             raise PlaywrightSessionError("Cookie 刷新超时必须大于 0 秒")
         self.headless = not interactive
-        self.open_mimo(timeout=timeout_seconds * 1000)
-        if not interactive:
+        page = self.open_mimo(timeout=timeout_seconds * 1000)
+        wait_for_timeout = getattr(page, "wait_for_timeout", None)
+        if wait_for_timeout is not None:
+            wait_for_timeout(min(3000, timeout_seconds * 1000))
+        if not interactive and previous_cookie is None:
             return self.get_cookie()
 
         deadline = time.monotonic() + timeout_seconds
         last_error = ""
         while time.monotonic() < deadline:
             try:
-                return self.get_cookie()
+                cookie = self.get_cookie()
+                if previous_cookie is None or cookie != previous_cookie:
+                    return cookie
             except PlaywrightSessionError as exc:
                 last_error = str(exc)
-                time.sleep(1)
+            time.sleep(1)
         raise PlaywrightSessionError(
-            last_error or "等待 MiMo 登录状态超时，请完成登录或验证码验证"
+            last_error or "等待 MiMo 更新登录状态超时，请完成登录或验证码验证"
         )
 
     def _close_runtime(self) -> None:
@@ -207,6 +213,7 @@ class PlaywrightSession:
 def refresh_cookie(
     interactive: bool = False,
     timeout_seconds: int = 30,
+    previous_cookie: str | None = None,
 ) -> tuple[str | None, str | None]:
     """使用项目专用目录刷新 MiMo Cookie，返回 ``(Cookie, 错误)``。"""
     if timeout_seconds <= 0:
@@ -222,6 +229,7 @@ def refresh_cookie(
         return session.refresh_cookie(
             interactive=interactive,
             timeout_seconds=timeout_seconds,
+            previous_cookie=previous_cookie,
         ), None
     except PlaywrightSessionError as exc:
         return None, str(exc)
