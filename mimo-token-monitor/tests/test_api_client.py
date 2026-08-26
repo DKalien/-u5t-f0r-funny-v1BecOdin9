@@ -50,6 +50,36 @@ class TestThirdPartyUsageUrl(unittest.TestCase):
 
 
 class TestGPTWeeklyUsageParser(unittest.TestCase):
+    def test_new_format_extracts_primary_and_secondary_windows(self):
+        from api_client import _parse_gpt_windows
+
+        data = {
+            "rate_limits": {
+                "primary": {"used_percent": 12.5, "reset_after_seconds": 3600},
+                "secondary": {"used_percent": 42.5, "reset_after_seconds": 86400},
+            }
+        }
+        result = _parse_gpt_windows(data)
+        self.assertAlmostEqual(result["primary"]["used_percent"], 12.5)
+        self.assertAlmostEqual(result["secondary"]["used_percent"], 42.5)
+
+    def test_list_windows_identified_by_duration(self):
+        from api_client import _parse_gpt_windows
+
+        data = {"rate_limits": [
+            {"limit_window_seconds": 18000, "used_percent": 10},
+            {"limit_window_seconds": 604800, "used_percent": 60},
+        ]}
+        result = _parse_gpt_windows(data)
+        self.assertEqual(result["primary"]["used_percent"], 10.0)
+        self.assertEqual(result["secondary"]["used_percent"], 60.0)
+
+    def test_only_primary_window_has_no_weekly_result(self):
+        from api_client import _parse_gpt_secondary_window
+
+        data = {"rate_limits": {"primary": {"used_percent": 10}}}
+        self.assertIsNone(_parse_gpt_secondary_window(data))
+
     def test_new_format_rate_limits_list(self):
         from api_client import _parse_gpt_secondary_window
         data = {"data": {"rate_limits": [{"window": "weekly", "used_percent": 42.5, "resets_at": "2026-08-01T00:00:00Z"}]}}

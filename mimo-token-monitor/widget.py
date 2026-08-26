@@ -27,6 +27,7 @@ OVERVIEW_MODE = "overview"
 BASE_HEIGHT = 140
 # Overview keeps the same compact footprint as the other display modes.
 OVERVIEW_HEIGHT = BASE_HEIGHT
+GPT_BAR_GAP = 6
 
 # ── Colors ──────────────────────────────────────────────────────
 BG_COLOR = QColor(30, 30, 30, 220)
@@ -532,6 +533,9 @@ class TokenWidget(QWidget):
         lines.append(f"WLB: {self._format_overview_percent(tp_pct, has_api_key)}")
         has_gpt = bool(self.cfg.get("gpt_session_cookie", "").strip()) or (isinstance(self._gpt_data, dict) and self._gpt_data.get("used_percent") is not None)
         gpt_pct = self._gpt_data.get("used_percent") if isinstance(self._gpt_data, dict) else None
+        gpt_primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
+        primary_pct = gpt_primary.get("used_percent") if isinstance(gpt_primary, dict) else None
+        lines.append(f"GPT 5\u5c0f\u65f6: {self._format_overview_percent(primary_pct, has_gpt)}")
         lines.append(f"GPT \u5468\u9650\u989d: {self._format_overview_percent(gpt_pct, has_gpt)}")
         return lines
 
@@ -1112,6 +1116,41 @@ class TokenWidget(QWidget):
             cell_x, label_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
 
             label_rect = QRect(cell_x, label_y - 14, bar_w, 18)
+            if idx == 2:
+                primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
+                secondary = self._gpt_data.get("secondary") if isinstance(self._gpt_data, dict) else None
+                secondary = secondary or (self._gpt_data if isinstance(self._gpt_data, dict) else None)
+                primary_text = self._format_overview_percent(
+                    primary.get("used_percent") if isinstance(primary, dict) else None,
+                    configured,
+                )
+                secondary_text = self._format_overview_percent(
+                    secondary.get("used_percent") if isinstance(secondary, dict) else None,
+                    configured,
+                )
+                p.setPen(QPen(TEXT_COLOR))
+                p.setFont(overview_font)
+                metrics = QFontMetrics(overview_font)
+                segment_width = (bar_w - GPT_BAR_GAP) // 2
+                for segment_x, title, percent_text in (
+                    (cell_x, "GPT 5\u5c0f\u65f6", primary_text),
+                    (cell_x + segment_width + GPT_BAR_GAP, "GPT \u5468", secondary_text),
+                ):
+                    segment_rect = QRect(segment_x, label_rect.y(), segment_width, label_rect.height())
+                    title_width = max(0, segment_width - metrics.horizontalAdvance(percent_text) - 4)
+                    p.drawText(
+                        QRect(segment_rect.x(), segment_rect.y(), title_width, segment_rect.height()),
+                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                        metrics.elidedText(title, Qt.TextElideMode.ElideRight, title_width),
+                    )
+                    p.drawText(
+                        segment_rect,
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                        percent_text,
+                    )
+                self._draw_gpt_combined_bar(p, cell_x, bar_y, bar_w, bar_h, primary, secondary)
+                continue
+
             percent_text = self._format_overview_percent(raw_percent, configured)
             if idx == 0:
                 expiry_text = _format_overview_expiry(self.cfg.get("expiry_date", ""))
@@ -1167,6 +1206,34 @@ class TokenWidget(QWidget):
                 p.setClipPath(bar_path)
                 p.drawRoundedRect(cell_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
                 p.restore()
+
+    def _draw_gpt_combined_bar(self, p: QPainter, x: int, y: int, width: int, height: int,
+                               primary: dict | None, secondary: dict | None):
+        """Draw two independent bars: left is 5-hour, right is weekly."""
+        gap = GPT_BAR_GAP
+        segment_width = (width - gap) // 2
+        for segment_x, window in (
+            (x, primary),
+            (x + segment_width + gap, secondary),
+        ):
+            p.setBrush(QBrush(BAR_BG))
+            p.setPen(QPen(TEXT_COLOR))
+            p.drawRoundedRect(segment_x, y, segment_width, height, 4, 4)
+            if not isinstance(window, dict):
+                continue
+            percent = self._normalize_overview_percent(window.get("used_percent"))
+            if percent is None or percent <= 0:
+                continue
+            fraction = percent / 100.0
+            fill_width = max(1, int(segment_width * fraction))
+            fill_radius = min(4, fill_width // 2)
+            p.setBrush(QBrush(_bar_color(1 - fraction)))
+            p.save()
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(segment_x, y, segment_width, height), 4, 4)
+            p.setClipPath(path)
+            p.drawRoundedRect(segment_x, y, fill_width, height, fill_radius, fill_radius)
+            p.restore()
 
     def _paint_third_party(self, p: QPainter):
         """Paint third-party usage data in the content area."""

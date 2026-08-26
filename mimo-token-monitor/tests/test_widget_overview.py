@@ -46,7 +46,7 @@ from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT,
-    TEXT_COLOR, _format_overview_expiry,
+    BG_COLOR, TEXT_COLOR, _format_overview_expiry,
 )
 from router_control import RouterResult  # noqa: E402
 
@@ -469,6 +469,20 @@ class TestThirdPartyCallbackExtraction(unittest.TestCase):
 
 
 class TestGPTCallback(unittest.TestCase):
+    def test_overview_tooltip_shows_both_gpt_windows(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        w._gpt_data = {
+            "used_percent": 40.0,
+            "primary": {"used_percent": 20.0},
+            "secondary": {"used_percent": 40.0},
+        }
+
+        lines = w._build_overview_tooltip_lines()
+
+        self.assertIn("GPT 5\u5c0f\u65f6: 20.0%", lines)
+        self.assertIn("GPT \u5468\u9650\u989d: 40.0%", lines)
+        w.close()
+
     def test_failure_keeps_last_data_and_marks_it_stale(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         old_data = {"used_percent": 30.0, "remaining_percent": 70.0}
@@ -508,6 +522,8 @@ class TestOverviewRenderSmoke(unittest.TestCase):
         w._tp_data = {"used_percent": 55.0, "remaining_percent": 45.0,
                        "is_valid": True, "window": "7d", "total_percent": 100}
         w._gpt_data = {"used_percent": 30.0, "remaining_percent": 70.0,
+                       "primary": {"used_percent": 20.0},
+                       "secondary": {"used_percent": 30.0},
                        "reset_at": "2026-01-01T00:00:00Z", "source": "test"}
         w._timer.stop()
         w._do_fetch = lambda: None
@@ -531,6 +547,9 @@ class TestOverviewRenderSmoke(unittest.TestCase):
         self.assertGreater(img.pixelColor(x0 + bar_w0 // 2, bar_y0 + bar_h0 // 2).alpha(), 0)
         self.assertGreater(img.pixelColor(x1 + bar_w1 // 2, bar_y1 + bar_h1 // 2).alpha(), 0)
         self.assertGreater(img.pixelColor(x2 + bar_w2 // 2, bar_y2 + bar_h2 // 2).alpha(), 0)
+        segment_width = (bar_w2 - 6) // 2
+        gap_color = img.pixelColor(x2 + segment_width + 2, bar_y2 + bar_h2 // 2)
+        self.assertEqual(gap_color.getRgb(), BG_COLOR.getRgb())
         w.close()
 
     def test_update_time_is_painted_when_overview_has_error(self):

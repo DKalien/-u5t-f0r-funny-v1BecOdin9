@@ -1,6 +1,6 @@
 # MiMo Token Monitor
 
-MiMo Token Plan、WLB 与 GPT 周限额用量监控桌面悬浮窗。
+MiMo Token Plan、WLB 与 GPT 5 小时/周限额用量监控桌面悬浮窗。
 
 ## 功能
 
@@ -20,7 +20,7 @@ MiMo Token Plan、WLB 与 GPT 周限额用量监控桌面悬浮窗。
 - **Codex Router 维护**：从托盘查看当前路由开关状态、更新模型元数据，并开启、关闭或重启路由器
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
-- **用量总览页面**：标题栏切换到“总览”后，并列显示 Token Plan、WLB 与 GPT 周限额的使用百分比和进度条
+- **用量总览页面**：标题栏切换到“总览”后，并列显示 Token Plan、WLB 与 GPT 5 小时/周限额的使用百分比和进度条
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 - **本地设置数据库**：配置保存在外置 SQLite 文件中，不通过 Git 或网络同步
 
@@ -89,9 +89,9 @@ python -m playwright install chromium
 - 切换后悬浮窗显示剩余百分比、已用百分比、7 天窗口和状态
 - 未配置 API Key 时切换会显示提示，不会发送空请求
 
-### GPT 周限额
+### GPT 5 小时与周限额
 
-总览会优先使用本机 Codex 登录信息查询 GPT 周限额，也可在设置中填写 ChatGPT Session Cookie 作为备用认证；本地 Codex 会话记录是最后兜底。网络、限流或服务端瞬时失败会自动重试一次；刷新仍失败时继续显示上次成功数据，并在 tooltip 中标明具体失败来源。
+总览会优先使用本机 Codex 登录信息查询 GPT 5 小时与周限额，也可在设置中填写 ChatGPT Session Cookie 作为备用认证；本地 Codex 会话记录是最后兜底。GPT 行使用一条左右分段的进度条，左侧显示 5 小时窗口，右侧显示周窗口。网络、限流或服务端瞬时失败会自动重试一次；刷新仍失败时继续显示上次成功数据，并在 tooltip 中标明具体失败来源。
 
 ### 构建轻量启动器 EXE
 
@@ -211,4 +211,4 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - 配置与快照文件仅在本地存储。未配置 WLB API Key 时不会请求 WLB 服务
 - Cookie、API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 WLB 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
-- GPT 周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源
+- GPT 5 小时/周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源

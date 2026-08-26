@@ -217,6 +217,7 @@ def fetch_third_party_usage(base_url: str, api_key: str, window: str = "7d") -> 
 
 GPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 GPT_AUTH_SESSION_URL = "https://chatgpt.com/api/auth/session"
+GPT_PRIMARY_WINDOW_SECONDS = 5 * 60 * 60
 GPT_WEEKLY_WINDOW_SECONDS = 7 * 24 * 60 * 60
 
 
@@ -240,70 +241,13 @@ def _gpt_failure(errors: list | None, source: str, reason: str):
     return None
 
 
-def _parse_gpt_secondary_window(data):
-    """Extract weekly/secondary window fields from a ChatGPT usage response.
-
-    Supports multiple response shapes:
-      New object:  rate_limits is a dict with a .secondary sub-dict
-      New list:    rate_limits is a list; find entry with window=weekly/7d/secondary
-      Old:         rate_limit.secondary_window is a dict
-    Nested data wrappers are unwrapped automatically.
-    Returns a flat dict with used_percent, reset_at, reset_after_seconds, or None."""
-    if not isinstance(data, dict):
+def _parse_gpt_window(candidate):
+    """Normalize one GPT rate-limit window."""
+    if not isinstance(candidate, dict):
         return None
-
-    source = data.get("data") if isinstance(data.get("data"), dict) else data
-
-    secondary = None
-
-    rate_limits = source.get("rate_limits")
-    if isinstance(rate_limits, dict):
-        # New wham shape: rate_limits is an object with .secondary dict
-        candidate = rate_limits.get("secondary")
-        if isinstance(candidate, dict):
-            secondary = candidate
-    elif isinstance(rate_limits, list):
-        # New list shape: find entry with window=weekly, 7d, or type=secondary
-        for window_val in ("weekly", "7d", "secondary"):
-            for entry in rate_limits:
-                if isinstance(entry, dict) and entry.get("window") == window_val:
-                    secondary = entry
-                    break
-            if secondary is not None:
-                break
-        if secondary is None:
-            for entry in rate_limits:
-                if isinstance(entry, dict) and entry.get("type") == "secondary":
-                    secondary = entry
-                    break
-
-    # Old format: rate_limit.secondary_window is normally the weekly window.
-    if secondary is None:
-        rl = source.get("rate_limit") if isinstance(source.get("rate_limit"), dict) else None
-        if rl and isinstance(rl.get("secondary_window"), dict):
-            secondary = rl["secondary_window"]
-
-        # Some current Plus responses put the 7-day window in primary_window
-        # and leave secondary_window null. Do not mistake the usual 5-hour
-        # primary window for a weekly quota.
-        if secondary is None and rl and isinstance(rl.get("primary_window"), dict):
-            primary = rl["primary_window"]
-            try:
-                window_seconds = int(primary.get("limit_window_seconds", 0) or 0)
-            except (TypeError, ValueError):
-                window_seconds = 0
-            if window_seconds == GPT_WEEKLY_WINDOW_SECONDS:
-                secondary = primary
-
-    if secondary is None:
-        return None
-
-    raw_pct = secondary.get("used_percent")
+    raw_pct = candidate.get("used_percent")
     if raw_pct is None:
-        raw_pct = secondary.get("usedPercent")
-    if raw_pct is None:
-        return None
-
+        raw_pct = candidate.get("usedPercent")
     try:
         used_pct = float(raw_pct)
     except (ValueError, TypeError):
@@ -311,16 +255,81 @@ def _parse_gpt_secondary_window(data):
     if not _math.isfinite(used_pct):
         return None
     used_pct = max(0.0, min(100.0, used_pct))
-
-    reset_at = secondary.get("resets_at") or secondary.get("reset_at")
-    reset_after = secondary.get("reset_after_seconds") or secondary.get("reset_after")
-
     return {
         "used_percent": round(used_pct, 2),
         "remaining_percent": round(100.0 - used_pct, 2),
-        "reset_at": reset_at,
-        "reset_after_seconds": reset_after,
+        "reset_at": candidate.get("resets_at") or candidate.get("reset_at"),
+        "reset_after_seconds": candidate.get("reset_after_seconds") or candidate.get("reset_after"),
     }
+
+
+def _parse_gpt_windows(data):
+    """Extract weekly/secondary window fields from a ChatGPT usage response.
+
+    Supports multiple response shapes:
+      New object:  rate_limits is a dict with a .secondary sub-dict
+      New list:    rate_limits is a list; find entry with window=weekly/7d/secondary
+      Old:         rate_limit.secondary_window is a dict
+    Nested data wrappers are unwrapped automatically.
+    Returns ``{"primary": ..., "secondary": ...}``; missing windows are None."""
+    if not isinstance(data, dict):
+        return None
+
+    source = data.get("data") if isinstance(data.get("data"), dict) else data
+
+    primary = secondary = None
+
+    rate_limits = source.get("rate_limits")
+    if isinstance(rate_limits, dict):
+        primary = rate_limits.get("primary") or rate_limits.get("primary_window")
+        secondary = rate_limits.get("secondary") or rate_limits.get("secondary_window")
+    elif isinstance(rate_limits, list):
+        for entry in rate_limits:
+            if not isinstance(entry, dict):
+                continue
+            window = str(entry.get("window") or entry.get("type") or "").lower()
+            try:
+                seconds = int(entry.get("limit_window_seconds", 0) or 0)
+            except (TypeError, ValueError):
+                seconds = 0
+            if window in {"weekly", "7d", "secondary"} or seconds == GPT_WEEKLY_WINDOW_SECONDS:
+                secondary = secondary or entry
+            elif window in {"primary", "5h", "5_hour", "5-hour"} or seconds == GPT_PRIMARY_WINDOW_SECONDS:
+                primary = primary or entry
+
+    # Old format: rate_limit.secondary_window is normally the weekly window.
+    rl = source.get("rate_limit") if isinstance(source.get("rate_limit"), dict) else None
+    if rl:
+        primary = primary or rl.get("primary_window")
+        secondary = secondary or rl.get("secondary_window")
+        # Some responses put the weekly window in primary_window.
+        if secondary is None and isinstance(primary, dict):
+            try:
+                seconds = int(primary.get("limit_window_seconds", 0) or 0)
+            except (TypeError, ValueError):
+                seconds = 0
+            if seconds == GPT_WEEKLY_WINDOW_SECONDS:
+                secondary, primary = primary, None
+
+    return {"primary": _parse_gpt_window(primary), "secondary": _parse_gpt_window(secondary)}
+
+
+def _parse_gpt_secondary_window(data):
+    """Backward-compatible weekly-window parser."""
+    windows = _parse_gpt_windows(data)
+    return windows.get("secondary") if windows else None
+
+
+def _gpt_result_with_windows(data, source):
+    windows = _parse_gpt_windows(data)
+    secondary = windows.get("secondary") if windows else None
+    if secondary is None:
+        return None
+    result = dict(secondary)
+    result["primary"] = windows.get("primary")
+    result["secondary"] = dict(secondary)
+    result["source"] = source
+    return result
 
 
 def fetch_gpt_weekly_usage(session_cookie=""):
@@ -406,11 +415,10 @@ def _gpt_try_local_auth(errors=None):
         return _gpt_failure(errors, "本机 Codex 登录", f"{reason}（HTTP {resp.status_code}）")
 
     data = resp.json()
-    parsed = _parse_gpt_secondary_window(data)
+    parsed = _gpt_result_with_windows(data, "local_codex_auth")
     if parsed is None:
         return _gpt_failure(errors, "本机 Codex 登录", "响应中没有 7 天额度窗口")
 
-    parsed["source"] = "local_codex_auth"
     return parsed
 
 def _gpt_try_session_cookie(session_cookie="", errors=None):
@@ -456,11 +464,10 @@ def _gpt_try_session_cookie(session_cookie="", errors=None):
         return _gpt_failure(errors, "ChatGPT Cookie", f"{reason}（HTTP {resp2.status_code}）")
 
     data = resp2.json()
-    parsed = _parse_gpt_secondary_window(data)
+    parsed = _gpt_result_with_windows(data, "session_cookie")
     if parsed is None:
         return _gpt_failure(errors, "ChatGPT Cookie", "响应中没有 7 天额度窗口")
 
-    parsed["source"] = "session_cookie"
     return parsed
 
 
@@ -491,9 +498,8 @@ def _gpt_try_jsonl(errors=None):
                 payload = entry.get("payload") if isinstance(entry, dict) else None
                 if not isinstance(payload, dict):
                     continue
-                parsed = _parse_gpt_secondary_window(payload)
+                parsed = _gpt_result_with_windows(payload, "local_jsonl")
                 if parsed is not None:
-                    parsed["source"] = "local_jsonl"
                     return parsed
         except Exception:
             continue
