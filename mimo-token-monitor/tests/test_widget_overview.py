@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import Mock, patch
 
 # Ensure mimo-token-monitor package is importable
@@ -35,6 +36,7 @@ def tearDownModule():
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QRect, Qt  # noqa: E402
+from PyQt6.QtGui import QFont, QFontMetrics  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 # Ensure QApplication exists
@@ -44,6 +46,7 @@ from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT,
+    TEXT_COLOR, _format_overview_expiry,
 )
 from router_control import RouterResult  # noqa: E402
 
@@ -68,6 +71,40 @@ def _make_widget(**overrides):
     w._do_fetch_third_party = lambda: None
     w._do_fetch_gpt = lambda: None
     return w
+
+
+class _OverviewPainter:
+    """Small painter double for checking overview text and pen colors."""
+
+    def __init__(self):
+        self._pen = None
+        self._font = QFont()
+        self.text_records = []
+
+    def setPen(self, pen):
+        self._pen = pen
+
+    def setFont(self, font):
+        self._font = QFont(font)
+
+    def setBrush(self, _brush):
+        pass
+
+    def drawText(self, *args):
+        rect = args[0] if isinstance(args[0], QRect) else None
+        self.text_records.append((rect, args[-1], self._pen.color(), QFont(self._font)))
+
+    def drawRoundedRect(self, *_args):
+        pass
+
+    def save(self):
+        pass
+
+    def restore(self):
+        pass
+
+    def setClipPath(self, _path):
+        pass
 
 
 class TestModeCycle(unittest.TestCase):
@@ -212,6 +249,79 @@ class TestOverviewRowMetrics(unittest.TestCase):
         for index in range(3):
             _, _, _, bar_width, bar_height = TokenWidget._overview_row_metrics(index)
             self.assertEqual((bar_width, bar_height), (228, 14))
+
+
+class TestOverviewExpiryRendering(unittest.TestCase):
+    def _render_first_row(self, days_left=2, alert_enabled=True, row_width=500):
+        expiry_date = (datetime.now().date() + timedelta(days=days_left)).strftime("%Y-%m-%d")
+        w = _make_widget(
+            display_mode=OVERVIEW_MODE,
+            cookie="fake",
+            expiry_date=expiry_date,
+            expiry_alert_enabled=alert_enabled,
+        )
+        w._plan_total = 1000
+        w._plan_used = 425
+        painter = _OverviewPainter()
+        def row_metrics(index):
+            return 16, 38 + index * 34, 44 + index * 34, row_width if index == 0 else 228, 14
+
+        with patch.object(TokenWidget, "_overview_row_metrics", side_effect=row_metrics):
+            w._paint_overview(painter)
+        return w, expiry_date, painter
+
+    @staticmethod
+    def _first_row_records(painter):
+        return [record for record in painter.text_records if record[0] and record[0].y() == 24]
+
+    def test_first_row_combines_title_and_short_expiry(self):
+        w, expiry_date, painter = self._render_first_row()
+        expiry_text = _format_overview_expiry(expiry_date)
+        records = self._first_row_records(painter)
+        title_records = [record for record in records if record[1] != "42.5%"]
+
+        self.assertIn("还剩2天", expiry_text)
+        self.assertEqual(
+            "".join(record[1] for record in title_records),
+            f"Token Plan {expiry_text}",
+        )
+        self.assertNotIn("有效期至", title_records[0][1])
+        self.assertEqual(title_records[0][2], TEXT_COLOR)
+        w.close()
+
+    def test_first_row_date_and_reminder_keep_title_color(self):
+        for alert_enabled in (True, False):
+            with self.subTest(alert_enabled=alert_enabled):
+                w, expiry_date, painter = self._render_first_row(
+                    days_left=2, alert_enabled=alert_enabled
+                )
+                title_records = [
+                    record
+                    for record in self._first_row_records(painter)
+                    if record[1] != "42.5%"
+                ]
+                self.assertEqual(title_records[0][2], TEXT_COLOR)
+                w.close()
+
+    def test_first_row_accepts_padded_and_unpadded_dates(self):
+        self.assertEqual(_format_overview_expiry("2099-09-25"), "9-25")
+        self.assertEqual(_format_overview_expiry("2099-9-25"), "9-25")
+
+    def test_first_row_text_uses_nine_point_font_and_leaves_percent_room(self):
+        w, expiry_date, painter = self._render_first_row(row_width=228)
+        records = self._first_row_records(painter)
+        percent_record = next(record for record in records if record[1] == "42.5%")
+        percent_start = (
+            percent_record[0].right()
+            + 1
+            - QFontMetrics(percent_record[3]).horizontalAdvance("42.5%")
+        )
+
+        self.assertTrue(records)
+        self.assertTrue(all(record[3].family() == "Microsoft YaHei" for record in records))
+        self.assertTrue(all(record[3].pointSize() == 9 for record in records))
+        self.assertLess(max(record[0].right() for record in records if record[1] != "42.5%"), percent_start)
+        w.close()
 
 
 class TestMimoTooltipLines(unittest.TestCase):

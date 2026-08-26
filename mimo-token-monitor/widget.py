@@ -1,5 +1,5 @@
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QPoint, QRect, QRectF, QPointF
-from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QIcon, QCursor, QPolygonF, QPainterPath
+from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QFontMetrics, QIcon, QCursor, QPolygonF, QPainterPath
 from PyQt6.QtWidgets import (
     QWidget, QMenu, QDialog, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton,
@@ -90,6 +90,17 @@ def _format_expiry(expiry_date) -> str:
     if 0 <= days_left < 7:
         return f"{expiry_text}，还剩{days_left}天"
     return expiry_text
+
+
+def _format_overview_expiry(expiry_date) -> str:
+    """Format a valid overview date as M-D while retaining the reminder."""
+    expiry_text = str(expiry_date or "").strip()
+    formatted = _format_expiry(expiry_text)
+    try:
+        expiry = datetime.strptime(expiry_text, "%Y-%m-%d").date()
+    except ValueError:
+        return formatted
+    return f"{expiry.month}-{expiry.day}{formatted[len(expiry_text):]}"
 
 
 # ── Plan tier definitions ──────────────────────────────────────
@@ -1067,6 +1078,8 @@ class TokenWidget(QWidget):
 
     def _paint_overview(self, p: QPainter):
         """Paint the overview page listing all available data sources."""
+        overview_font = QFont("Microsoft YaHei", 9)
+        p.setFont(overview_font)
         has_cookie = bool(self.cfg.get("cookie", "").strip())
         has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
         has_gpt = bool(self.cfg.get("gpt_session_cookie", "").strip()) or (isinstance(self._gpt_data, dict) and self._gpt_data.get("used_percent") is not None)
@@ -1098,18 +1111,46 @@ class TokenWidget(QWidget):
         for idx, (name, configured, raw_percent) in enumerate(rows):
             cell_x, label_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
 
-            p.setPen(QPen(TEXT_COLOR))
             label_rect = QRect(cell_x, label_y - 14, bar_w, 18)
-            p.drawText(
-                label_rect,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                name,
-            )
-            p.drawText(
-                label_rect,
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                self._format_overview_percent(raw_percent, configured),
-            )
+            percent_text = self._format_overview_percent(raw_percent, configured)
+            if idx == 0:
+                expiry_text = _format_overview_expiry(self.cfg.get("expiry_date", ""))
+                title_text = f"{name} {expiry_text}"
+                metrics = QFontMetrics(overview_font)
+                title_width = max(
+                    0, label_rect.width() - metrics.horizontalAdvance(percent_text) - 4
+                )
+                title_rect = QRect(
+                    label_rect.x(), label_rect.y(), title_width, label_rect.height()
+                )
+                p.setPen(QPen(TEXT_COLOR))
+                p.setFont(overview_font)
+                p.drawText(
+                    title_rect,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    metrics.elidedText(title_text, Qt.TextElideMode.ElideRight, title_width),
+                )
+
+                p.setPen(QPen(TEXT_COLOR))
+                p.setFont(overview_font)
+                p.drawText(
+                    label_rect,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    percent_text,
+                )
+            else:
+                p.setPen(QPen(TEXT_COLOR))
+                p.setFont(overview_font)
+                p.drawText(
+                    label_rect,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    name,
+                )
+                p.drawText(
+                    label_rect,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                    percent_text,
+                )
 
             p.setBrush(QBrush(BAR_BG))
             p.drawRoundedRect(cell_x, bar_y, bar_w, bar_h, 4, 4)
