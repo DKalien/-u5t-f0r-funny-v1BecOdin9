@@ -19,7 +19,7 @@ MiMo Token Plan、WLB 与 GPT 5 小时/周限额用量监控桌面悬浮窗。
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip，并可直接重启悬浮窗
 - **Codex Router 维护**：从托盘查看当前路由开关状态、更新模型元数据，并开启、关闭或重启路由器
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
-- **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 http://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态
+- **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 https://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态；接口返回 `reset_at` 时同时显示 7 日窗口重置日期
 - **用量总览页面**：标题栏切换到“总览”后，并列显示 Token Plan、WLB 与 GPT 5 小时/周限额的使用百分比和进度条
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 - **本地设置数据库**：配置保存在外置 SQLite 文件中，不通过 Git 或网络同步
@@ -85,9 +85,9 @@ python -m playwright install chromium
 
 在设置中填写 **API Base URL** 和 **API Key** 后，可通过标题栏循环图标切换到第三方用量显示模式或“总览”页面：
 
-- **Base URL**：默认 http://codex.wlbclub.com；可填写主域名、`/v1` 或完整的 `/v1/usage`，程序会自动避免重复拼接
+- **Base URL**：默认 https://codex.wlbclub.com；可填写主域名、`/v1` 或完整的 `/v1/usage`，程序会自动避免重复拼接
 - **API Key**：来自 CC Switch 的 API Key
-- 切换后悬浮窗显示剩余百分比、已用百分比、7 天窗口和状态
+- 切换后悬浮窗显示剩余百分比、已用百分比、7 天窗口和状态；接口返回 `reset_at` 时显示重置日期时间，总览中的 WLB 标题会在临近重置时显示剩余天数
 - 未配置 API Key 时切换会显示提示，不会发送空请求
 
 ### GPT 5 小时与周限额

@@ -4,7 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import Mock, patch
 
 # Ensure mimo-token-monitor package is importable
@@ -46,7 +46,8 @@ from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT,
-    BG_COLOR, TEXT_COLOR, _format_overview_expiry,
+    BG_COLOR, TEXT_COLOR, _format_overview_expiry, _format_overview_reset,
+    _parse_reset_datetime,
 )
 from router_control import RouterResult  # noqa: E402
 
@@ -379,17 +380,59 @@ class TestMimoTooltipLines(unittest.TestCase):
         w.close()
 
 
+class TestWlbResetRendering(unittest.TestCase):
+    def test_iso_reset_time_is_converted_to_local_time(self):
+        utc_reset = datetime(2099, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            _parse_reset_datetime(utc_reset.isoformat().replace("+00:00", "Z")),
+            utc_reset.astimezone().replace(tzinfo=None),
+        )
+
+    def test_overview_wlb_title_includes_short_reset_and_keeps_percent_right(self):
+        reset_at = (
+            datetime.now().astimezone() + timedelta(days=5)
+        ).replace(microsecond=0).isoformat()
+        w = _make_widget(display_mode=OVERVIEW_MODE, third_party_api_key="k")
+        w._tp_data = {
+            "used_percent": 42.5,
+            "remaining_percent": 57.5,
+            "window": "7d",
+            "total_percent": 100,
+            "reset_at": reset_at,
+        }
+        painter = _OverviewPainter()
+
+        w._paint_overview(painter)
+
+        row_records = [
+            record for record in painter.text_records if record[0] and record[0].y() == 58
+        ]
+        title_records = [record for record in row_records if record[1] != "42.5%"]
+        self.assertEqual(
+            "".join(record[1] for record in title_records),
+            f"WLB {_format_overview_reset(reset_at)}",
+        )
+        self.assertIn("还剩5天", title_records[0][1])
+        self.assertEqual(title_records[0][2], TEXT_COLOR)
+        self.assertEqual(next(record for record in row_records if record[1] == "42.5%")[2], TEXT_COLOR)
+        w.close()
+
+
 class TestThirdPartyTooltipLines(unittest.TestCase):
     """Third-party tooltip builder shows percentages from _tp_data."""
 
     def test_with_data(self):
         w = _make_widget(third_party_api_key="k")
         w._tp_data = {"used_percent": 33.33, "remaining_percent": 66.67,
-                       "is_valid": True, "window": "7d", "total_percent": 100}
+                       "is_valid": True, "window": "7d", "total_percent": 100,
+                       "reset_at": "2099-09-01T12:34:56Z"}
         lines = w._build_third_party_tooltip_lines()
         joined = "\n".join(lines)
         self.assertIn("33.33%", joined)
         self.assertIn("Active", joined)
+        expected = datetime(2099, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+        self.assertIn(f"7日重置: {expected.astimezone():%Y-%m-%d %H:%M:%S}", joined)
         w.close()
 
     def test_no_data(self):

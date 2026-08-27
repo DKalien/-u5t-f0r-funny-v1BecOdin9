@@ -104,6 +104,36 @@ def _format_overview_expiry(expiry_date) -> str:
     return f"{expiry.month}-{expiry.day}{formatted[len(expiry_text):]}"
 
 
+def _parse_reset_datetime(reset_at):
+    """Parse the ISO-8601 reset time returned by WLB into local time."""
+    raw_value = str(reset_at or "").strip()
+    if not raw_value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+
+
+def _format_reset_datetime(reset_at) -> str:
+    """Format a WLB reset timestamp for the full-detail views."""
+    parsed = _parse_reset_datetime(reset_at)
+    if parsed is not None:
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
+    return str(reset_at or "").strip()
+
+
+def _format_overview_reset(reset_at) -> str:
+    """Format a WLB reset date as M-D and add a short-term reminder."""
+    parsed = _parse_reset_datetime(reset_at)
+    if parsed is None:
+        return _format_reset_datetime(reset_at)
+    days_left = (parsed.date() - datetime.now().date()).days
+    reminder = f"，还剩{days_left}天" if 0 <= days_left < 7 else ""
+    return f"{parsed.month}-{parsed.day}{reminder}"
+
+
 # ── Plan tier definitions ──────────────────────────────────────
 PLAN_TIERS = [
     (82_000_000_000, "Max", 659),
@@ -263,7 +293,7 @@ class SettingsDialog(QDialog):
         layout.addRow("快照路径:", self.snapshot_edit)
 
         # third-party usage settings
-        self.tp_base_url_edit = QLineEdit(cfg.get("third_party_base_url", "http://codex.wlbclub.com"))
+        self.tp_base_url_edit = QLineEdit(cfg.get("third_party_base_url", "https://codex.wlbclub.com"))
         self.tp_base_url_edit.setPlaceholderText("可填主域名、/v1 或完整 /v1/usage，程序会自动规范")
         layout.addRow("WLB Base URL:", self.tp_base_url_edit)
 
@@ -331,7 +361,7 @@ class SettingsDialog(QDialog):
         self.cfg["expiry_date"] = self.expiry_edit.text().strip()
         self.cfg["expiry_alert_enabled"] = self.expiry_alert_check.isChecked()
         self.cfg["snapshot_path"] = self.snapshot_edit.text().strip()
-        self.cfg["third_party_base_url"] = self.tp_base_url_edit.text().strip() or "http://codex.wlbclub.com"
+        self.cfg["third_party_base_url"] = self.tp_base_url_edit.text().strip() or "https://codex.wlbclub.com"
         self.cfg["third_party_api_key"] = self.tp_api_key_edit.text().strip()
         self.cfg["gpt_session_cookie"] = self.gpt_session_cookie_edit.text().strip()
         return self.cfg
@@ -527,6 +557,9 @@ class TokenWidget(QWidget):
             lines.append(f"已用: {d.get('used_percent', 0):.2f}%")
             lines.append(f"窗口: {d.get('window', '7d')}")
             lines.append(f"总额: {d.get('total_percent', 100)}%")
+            reset_text = _format_reset_datetime(d.get("reset_at"))
+            if reset_text:
+                lines.append(f"7日重置: {reset_text}")
             lines.append(f"状态: {'Active' if d.get('is_valid') else 'Inactive'}")
         return lines
 
@@ -538,6 +571,14 @@ class TokenWidget(QWidget):
         has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
         tp_pct = self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None
         lines.append(f"WLB: {self._format_overview_percent(tp_pct, has_api_key)}")
+        tp_reset = (
+            self._tp_data.get("reset_at")
+            if has_api_key and isinstance(self._tp_data, dict)
+            else None
+        )
+        reset_text = _format_reset_datetime(tp_reset)
+        if reset_text:
+            lines.append(f"WLB 重置: {reset_text}")
         has_gpt = bool(self.cfg.get("gpt_session_cookie", "").strip()) or (isinstance(self._gpt_data, dict) and self._gpt_data.get("used_percent") is not None)
         gpt_pct = self._gpt_data.get("used_percent") if isinstance(self._gpt_data, dict) else None
         gpt_primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
@@ -1159,9 +1200,17 @@ class TokenWidget(QWidget):
                 continue
 
             percent_text = self._format_overview_percent(raw_percent, configured)
-            if idx == 0:
-                expiry_text = _format_overview_expiry(self.cfg.get("expiry_date", ""))
-                title_text = f"{name} {expiry_text}"
+            if idx in (0, 1):
+                if idx == 0:
+                    suffix = _format_overview_expiry(self.cfg.get("expiry_date", ""))
+                else:
+                    reset_at = (
+                        self._tp_data.get("reset_at")
+                        if configured and isinstance(self._tp_data, dict)
+                        else None
+                    )
+                    suffix = _format_overview_reset(reset_at)
+                title_text = f"{name} {suffix}" if suffix else name
                 metrics = QFontMetrics(overview_font)
                 title_width = max(
                     0, label_rect.width() - metrics.horizontalAdvance(percent_text) - 4
@@ -1277,6 +1326,21 @@ class TokenWidget(QWidget):
         p.setPen(QPen(ACCENT_GREEN if is_valid else ACCENT_RED if has_data else DIM))
         p.drawText(16, 98, f"状态: {status_text}")
 
+        reset_text = _format_reset_datetime(d.get("reset_at")) if has_data else ""
+        if reset_text:
+            p.setPen(QPen(DIM))
+            reset_line = f"7日重置: {reset_text}"
+            reset_line = p.fontMetrics().elidedText(
+                reset_line,
+                Qt.TextElideMode.ElideRight,
+                228,
+            )
+            p.drawText(
+                QRect(16, 104, 228, 16),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                reset_line,
+            )
+
     def _do_fetch_third_party(self):
         """Dispatch third-party usage fetch."""
         if self._exit_requested:
@@ -1291,7 +1355,7 @@ class TokenWidget(QWidget):
             self._apply_overview_tooltip_if_needed()
             self.update()
             return
-        base_url = self.cfg.get("third_party_base_url", "http://codex.wlbclub.com")
+        base_url = self.cfg.get("third_party_base_url", "https://codex.wlbclub.com")
         self._tp_worker = ThirdPartyFetchWorker(base_url, api_key)
         self._tp_worker.finished.connect(self._on_third_party_fetch_done)
         self._tp_worker.start()

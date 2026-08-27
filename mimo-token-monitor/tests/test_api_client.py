@@ -5,11 +5,13 @@ from api_client import (
     DEFAULT_THIRD_PARTY_BASE_URL,
     _third_party_usage_url,
     fetch_third_party_usage,
+    parse_third_party_usage,
 )
 
 
 class TestThirdPartyUsageUrl(unittest.TestCase):
     def test_default_base_url(self):
+        self.assertEqual(DEFAULT_THIRD_PARTY_BASE_URL, "https://codex.wlbclub.com")
         self.assertEqual(
             _third_party_usage_url(""),
             f"{DEFAULT_THIRD_PARTY_BASE_URL}/v1/usage",
@@ -47,6 +49,33 @@ class TestThirdPartyUsageUrl(unittest.TestCase):
             headers={"Authorization": "Bearer test-key"},
             timeout=15,
         )
+
+
+class TestThirdPartyUsageParser(unittest.TestCase):
+    def test_selected_window_preserves_reset_at(self):
+        data = {
+            "rate_limits": [
+                {"window": "1d", "used": 1, "limit": 10, "reset_at": "ignored"},
+                {
+                    "window": "7d",
+                    "used": 25,
+                    "limit": 100,
+                    "reset_at": "2026-09-01T00:00:00Z",
+                },
+            ]
+        }
+
+        result = parse_third_party_usage(data)
+
+        self.assertEqual(result["reset_at"], "2026-09-01T00:00:00Z")
+        self.assertEqual(result["used_percent"], 25.0)
+
+    def test_missing_reset_at_is_backward_compatible(self):
+        result = parse_third_party_usage(
+            {"rate_limits": [{"window": "7d", "used": 25, "limit": 100}]}
+        )
+
+        self.assertIsNone(result["reset_at"])
 
 
 class TestGPTWeeklyUsageParser(unittest.TestCase):

@@ -89,7 +89,7 @@ def fetch_usage(cookie: str) -> dict:
 
     return {"ok": False, "data": None, "error": f"所有端点均失败: {'; '.join(errors[:3])}"}
 
-DEFAULT_THIRD_PARTY_BASE_URL = "http://codex.wlbclub.com"
+DEFAULT_THIRD_PARTY_BASE_URL = "https://codex.wlbclub.com"
 
 
 def _third_party_usage_url(base_url: str) -> str:
@@ -112,6 +112,7 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
         "is_valid": False, "window": window, "used": 0, "limit": 0,
         "remaining": 0, "used_percent": 0, "remaining_percent": 0,
         "total_percent": 100, "unit": "%", "has_rate_limit": False,
+        "reset_at": None,
     }
     if not isinstance(data, dict):
         return dict(empty)
@@ -171,6 +172,7 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
         "total_percent": 100,
         "unit": "%",
         "has_rate_limit": True,
+        "reset_at": entry.get("reset_at"),
     }
 
 
