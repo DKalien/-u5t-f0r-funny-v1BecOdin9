@@ -1613,26 +1613,14 @@ class TokenWidget(QWidget):
             self._playwright_recovery_attempted = False
             save_config(self.cfg)
             self._mimo_error = ""
-            if interactive:
-                QMessageBox.information(self, "Playwright 续期成功", "登录状态已更新，正在刷新用量。")
             self._do_fetch()
             return
 
-        if interactive:
-            QMessageBox.warning(
-                self,
-                "Playwright 续期失败",
-                error or "无法刷新登录状态，请在打开的浏览器中完成登录或验证码验证。",
-            )
-        elif (
-            "过期" in str(error or "")
-            and not self._playwright_recovery_attempted
-        ):
-            self._playwright_recovery_attempted = True
-            self._refresh_playwright_cookie(
-                interactive=True,
-                require_cookie_change=True,
-            )
+        QMessageBox.warning(
+            self,
+            "Playwright 续期失败",
+            error or "无法刷新登录状态；如需登录或验证码验证，请从菜单手动续期。",
+        )
 
     # ── Fetch ───────────────────────────────────────────────────
     def _do_fetch(self):
@@ -1690,7 +1678,7 @@ class TokenWidget(QWidget):
         ):
             self._playwright_recovery_attempted = True
             self._refresh_playwright_cookie(
-                interactive=True,
+                interactive=False,
                 require_cookie_change=True,
             )
         self._refresh_error_state()

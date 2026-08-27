@@ -1,3 +1,5 @@
+> 历史归档（截至 2026-08-27）：本文计划的 settings.db Git 同步方案已退出现役，相关 `data_sync.py`/`sync_runtime.py` 不存在于当前实现；请以 `mimo-token-monitor/README.md` 和 `CLAUDE.md` 为准。
+
 # MiMo 设置数据库 Git 同步实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

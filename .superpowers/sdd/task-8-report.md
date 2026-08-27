@@ -1,3 +1,5 @@
+> 历史归档（截至 2026-08-27）：本文记录已退出现役的 settings.db Git 同步方案，不代表当前代码；当前实现以 `mimo-token-monitor/README.md` 和 `CLAUDE.md` 为准。
+
 # Task 8 回归覆盖报告
 
 ## 状态

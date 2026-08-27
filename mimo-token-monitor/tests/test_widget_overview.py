@@ -201,9 +201,26 @@ class TestPlaywrightRecovery(unittest.TestCase):
         )
 
         w._refresh_playwright_cookie.assert_called_once_with(
-            interactive=True,
+            interactive=False,
             require_cookie_change=True,
         )
+        w.close()
+
+    def test_playwright_success_is_silent_and_failure_warns(self):
+        w = _make_widget(cookie="stale")
+        w._do_fetch = Mock()
+        w._playwright_worker = Mock()
+
+        with patch("widget.QMessageBox.information") as information, patch(
+            "widget.QMessageBox.warning"
+        ) as warning:
+            w._on_playwright_cookie_done("fresh", None, False)
+            information.assert_not_called()
+            warning.assert_not_called()
+            self.assertEqual(w.cfg["cookie"], "fresh")
+            w._on_playwright_cookie_done(None, "refresh failed", False)
+
+        warning.assert_called_once()
         w.close()
 
 

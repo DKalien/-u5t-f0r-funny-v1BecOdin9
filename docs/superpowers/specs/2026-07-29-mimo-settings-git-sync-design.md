@@ -1,3 +1,5 @@
+> 历史归档（截至 2026-08-27）：本文设计的 settings.db Git 同步方案已退出现役，相关 `data_sync.py`/`sync_runtime.py` 不存在于当前实现；请以 `mimo-token-monitor/README.md` 和 `CLAUDE.md` 为准。
+
 # 悬浮窗 SQLite 数据 Git 同步设计
 
 日期：2026-07-29

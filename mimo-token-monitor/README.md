@@ -60,8 +60,9 @@ python -m playwright install chromium
 
 该配置目录位于 `MIMO_TOKEN_MONITOR_DATA_DIR` 下，不使用也不修改现有 Edge/Chrome 用户目录。
 该目录包含登录状态，请勿复制给他人或提交到 Git。
-如果服务端 Cookie 已硬过期，程序会打开 Playwright 浏览器并等待用户完成登录或验证码；验证码
-仍然需要人工输入。Playwright 不能延长服务端设置的 Cookie 有效期。
+自动续期和过期恢复均在后台运行，不会闪现浏览器窗口；如果服务端 Cookie 已硬过期，续期会失败并
+提示用户，此时可从托盘或悬浮窗菜单手动执行「Playwright 续期」，在打开的浏览器中完成登录或验证码。
+验证码仍然需要人工输入。Playwright 不能延长服务端设置的 Cookie 有效期。
 
 **方式一：一键导入（推荐）**
 
