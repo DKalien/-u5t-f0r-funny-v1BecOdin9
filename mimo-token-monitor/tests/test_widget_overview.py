@@ -45,9 +45,9 @@ _app = QApplication.instance() or QApplication(sys.argv)
 from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
-    BASE_HEIGHT, OVERVIEW_HEIGHT,
-    BG_COLOR, TEXT_COLOR, _format_overview_expiry, _format_overview_reset,
-    _parse_reset_datetime,
+    BASE_HEIGHT, OVERVIEW_HEIGHT, DUAL_BAR_GAP,
+    BG_COLOR, TEXT_COLOR, _format_overview_expiry,
+    _parse_reset_datetime, _format_overview_reset_time, _format_overview_reset_days,
 )
 from router_control import RouterResult  # noqa: E402
 
@@ -316,12 +316,11 @@ class TestOverviewExpiryRendering(unittest.TestCase):
         records = self._first_row_records(painter)
         title_records = [record for record in records if record[1] != "42.5%"]
 
-        self.assertIn("还剩2天", expiry_text)
+        self.assertEqual(expiry_text, "2天")
         self.assertEqual(
             "".join(record[1] for record in title_records),
             f"Token Plan {expiry_text}",
         )
-        self.assertNotIn("有效期至", title_records[0][1])
         self.assertEqual(title_records[0][2], TEXT_COLOR)
         w.close()
 
@@ -340,8 +339,18 @@ class TestOverviewExpiryRendering(unittest.TestCase):
                 w.close()
 
     def test_first_row_accepts_padded_and_unpadded_dates(self):
-        self.assertEqual(_format_overview_expiry("2099-09-25"), "9-25")
-        self.assertEqual(_format_overview_expiry("2099-9-25"), "9-25")
+        for expiry_date in ("2099-09-25", "2099-9-25"):
+            days_left = max(0, (datetime.strptime(expiry_date, "%Y-%m-%d").date() - datetime.now().date()).days)
+            self.assertEqual(_format_overview_expiry(expiry_date), f"{days_left}天")
+
+    def test_first_row_invalid_or_missing_expiry_has_no_suffix(self):
+        self.assertEqual(_format_overview_expiry(""), "")
+        self.assertEqual(_format_overview_expiry("not-a-date"), "")
+        today = datetime.now().date()
+        self.assertEqual(_format_overview_expiry(today.isoformat()), "0天")
+        self.assertEqual(
+            _format_overview_expiry((today - timedelta(days=1)).isoformat()), "0天"
+        )
 
     def test_first_row_text_uses_nine_point_font_and_leaves_percent_room(self):
         w, expiry_date, painter = self._render_first_row(row_width=228)
@@ -389,12 +398,36 @@ class TestWlbResetRendering(unittest.TestCase):
             utc_reset.astimezone().replace(tzinfo=None),
         )
 
-    def test_overview_wlb_title_includes_short_reset_and_keeps_percent_right(self):
+    def test_unix_reset_time_and_relative_reset_fallback(self):
+        utc_reset = datetime(2099, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+        timestamp = utc_reset.timestamp()
+
+        self.assertEqual(
+            _parse_reset_datetime(timestamp),
+            utc_reset.astimezone().replace(tzinfo=None),
+        )
+        self.assertEqual(
+            _format_overview_reset_time(timestamp),
+            utc_reset.astimezone().strftime("%H:%M"),
+        )
+        self.assertEqual(
+            _format_overview_reset_days(timestamp),
+            f"{(utc_reset.astimezone().date() - datetime.now().date()).days}天",
+        )
+
+        before = datetime.now().astimezone().replace(tzinfo=None)
+        fallback = _parse_reset_datetime(None, 3600)
+        self.assertAlmostEqual((fallback - before).total_seconds(), 3600, delta=1)
+        self.assertRegex(_format_overview_reset_time(None, 3600), r"^\d{2}:\d{2}$")
+        self.assertRegex(_format_overview_reset_days(None, 5 * 86400), r"^\d+天$")
+
+    def test_overview_wlb_dual_labels_are_compact_and_use_nine_point_font(self):
         reset_at = (
             datetime.now().astimezone() + timedelta(days=5)
         ).replace(microsecond=0).isoformat()
         w = _make_widget(display_mode=OVERVIEW_MODE, third_party_api_key="k")
         w._tp_data = {
+            "daily": {"used_percent": 12.5},
             "used_percent": 42.5,
             "remaining_percent": 57.5,
             "window": "7d",
@@ -408,14 +441,80 @@ class TestWlbResetRendering(unittest.TestCase):
         row_records = [
             record for record in painter.text_records if record[0] and record[0].y() == 58
         ]
-        title_records = [record for record in row_records if record[1] != "42.5%"]
+        texts = [record[1] for record in row_records]
+        self.assertEqual(texts, ["WLB", "12.5%", "5天", "42.5%"])
+        self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
+        self.assertFalse(any("重置" in text or "还剩" in text for text in texts))
+        self.assertTrue(all(record[2] == TEXT_COLOR for record in row_records))
+        w.close()
+
+    def test_overview_wlb_missing_daily_window_shows_no_data(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE, third_party_api_key="k")
+        w._tp_data = {
+            "daily": {"has_rate_limit": False, "used_percent": 0},
+            "used_percent": 42.5,
+            "remaining_percent": 57.5,
+            "window": "7d",
+            "total_percent": 100,
+        }
+        painter = _OverviewPainter()
+
+        w._paint_overview(painter)
+
+        row_records = [
+            record for record in painter.text_records if record[0] and record[0].y() == 58
+        ]
+        texts = [record[1] for record in row_records]
+        self.assertEqual(texts, ["WLB", "--", "--天", "42.5%"])
+        self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
+        w.close()
+
+    def test_overview_gpt_dual_labels_use_primary_time_and_weekly_days(self):
+        primary_reset = datetime.now().astimezone() + timedelta(hours=1, minutes=46)
+        w = _make_widget(display_mode=OVERVIEW_MODE, gpt_session_cookie="k")
+        w._gpt_data = {
+            "used_percent": 42.5,
+            "primary": {"used_percent": 12.5, "reset_at": primary_reset.timestamp()},
+            "secondary": {"used_percent": 42.5, "reset_after": 5 * 86400},
+        }
+        painter = _OverviewPainter()
+
+        w._paint_overview(painter)
+
+        row_records = [
+            record for record in painter.text_records if record[0] and record[0].y() == 92
+        ]
+        texts = [record[1] for record in row_records]
         self.assertEqual(
-            "".join(record[1] for record in title_records),
-            f"WLB {_format_overview_reset(reset_at)}",
+            texts,
+            [
+                f"GPT {_format_overview_reset_time(primary_reset.timestamp())}",
+                "12.5%",
+                _format_overview_reset_days(None, 5 * 86400),
+                "42.5%",
+            ],
         )
-        self.assertIn("还剩5天", title_records[0][1])
-        self.assertEqual(title_records[0][2], TEXT_COLOR)
-        self.assertEqual(next(record for record in row_records if record[1] == "42.5%")[2], TEXT_COLOR)
+        self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
+        w.close()
+
+    def test_overview_gpt_missing_reset_uses_placeholders(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE, gpt_session_cookie="k")
+        w._gpt_data = {
+            "used_percent": 42.5,
+            "primary": {"used_percent": 12.5},
+            "secondary": {"used_percent": 42.5},
+        }
+        painter = _OverviewPainter()
+
+        w._paint_overview(painter)
+
+        row_records = [
+            record for record in painter.text_records if record[0] and record[0].y() == 92
+        ]
+        self.assertEqual(
+            [record[1] for record in row_records],
+            ["GPT --:--", "12.5%", "--天", "42.5%"],
+        )
         w.close()
 
 
@@ -452,7 +551,8 @@ class TestOverviewTooltipLines(unittest.TestCase):
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
         self.assertIn("Token Plan: \u672a\u914d\u7f6e", joined)
-        self.assertIn("WLB: \u672a\u914d\u7f6e", joined)
+        self.assertIn("WLB \u65e5\u9650\u989d: \u672a\u914d\u7f6e", joined)
+        self.assertIn("WLB \u5468\u9650\u989d: \u672a\u914d\u7f6e", joined)
         w.close()
 
     def test_mimo_configured_no_data(self):
@@ -474,11 +574,13 @@ class TestOverviewTooltipLines(unittest.TestCase):
 
     def test_tp_with_data(self):
         w = _make_widget(third_party_api_key="k")
-        w._tp_data = {"used_percent": 12.5, "remaining_percent": 87.5,
+        w._tp_data = {"daily": {"used_percent": 6.25},
+                       "used_percent": 12.5, "remaining_percent": 87.5,
                        "is_valid": True, "window": "7d", "total_percent": 100}
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
-        self.assertIn("WLB: 12.5%", joined)
+        self.assertIn("WLB \u65e5\u9650\u989d: 6.2%", joined)
+        self.assertIn("WLB \u5468\u9650\u989d: 12.5%", joined)
         w.close()
 
     def test_error_included_via_apply(self):
@@ -597,7 +699,8 @@ class TestOverviewRenderSmoke(unittest.TestCase):
         w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake", third_party_api_key="k", gpt_session_cookie="fake_gpt")
         w._plan_total = 1000
         w._plan_used = 300
-        w._tp_data = {"used_percent": 55.0, "remaining_percent": 45.0,
+        w._tp_data = {"daily": {"used_percent": 35.0},
+                       "used_percent": 55.0, "remaining_percent": 45.0,
                        "is_valid": True, "window": "7d", "total_percent": 100}
         w._gpt_data = {"used_percent": 30.0, "remaining_percent": 70.0,
                        "primary": {"used_percent": 20.0},
@@ -625,9 +728,16 @@ class TestOverviewRenderSmoke(unittest.TestCase):
         self.assertGreater(img.pixelColor(x0 + bar_w0 // 2, bar_y0 + bar_h0 // 2).alpha(), 0)
         self.assertGreater(img.pixelColor(x1 + bar_w1 // 2, bar_y1 + bar_h1 // 2).alpha(), 0)
         self.assertGreater(img.pixelColor(x2 + bar_w2 // 2, bar_y2 + bar_h2 // 2).alpha(), 0)
-        segment_width = (bar_w2 - 6) // 2
-        gap_color = img.pixelColor(x2 + segment_width + 2, bar_y2 + bar_h2 // 2)
-        self.assertEqual(gap_color.getRgb(), BG_COLOR.getRgb())
+        for x, bar_y, bar_w, bar_h in (
+            (x1, bar_y1, bar_w1, bar_h1),
+            (x2, bar_y2, bar_w2, bar_h2),
+        ):
+            segment_width = (bar_w - DUAL_BAR_GAP) // 2
+            gap_color = img.pixelColor(
+                x + segment_width + DUAL_BAR_GAP // 2,
+                bar_y + bar_h // 2,
+            )
+            self.assertEqual(gap_color.getRgb(), BG_COLOR.getRgb())
         w.close()
 
     def test_update_time_is_painted_when_overview_has_error(self):

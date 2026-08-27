@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton,
     QCheckBox, QHBoxLayout, QLabel, QMessageBox, QApplication, QSystemTrayIcon,
 )
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import math
 import os
@@ -27,7 +27,7 @@ OVERVIEW_MODE = "overview"
 BASE_HEIGHT = 140
 # Overview keeps the same compact footprint as the other display modes.
 OVERVIEW_HEIGHT = BASE_HEIGHT
-GPT_BAR_GAP = 6
+DUAL_BAR_GAP = 6
 
 # ── Colors ──────────────────────────────────────────────────────
 BG_COLOR = QColor(30, 30, 30, 220)
@@ -94,44 +94,83 @@ def _format_expiry(expiry_date) -> str:
 
 
 def _format_overview_expiry(expiry_date) -> str:
-    """Format a valid overview date as M-D while retaining the reminder."""
+    """Format a valid overview date as remaining days."""
     expiry_text = str(expiry_date or "").strip()
-    formatted = _format_expiry(expiry_text)
+    days_left = _expiry_days_left(expiry_text)
+    return f"{max(0, days_left)}天" if days_left is not None else ""
+
+
+def _parse_reset_datetime(reset_at, reset_after=None):
+    """Parse an ISO/Unix reset time, falling back to a relative delay."""
+    parsed = reset_at if isinstance(reset_at, datetime) else None
+    if parsed is None and isinstance(reset_at, (int, float)) and not isinstance(reset_at, bool):
+        try:
+            parsed = datetime.fromtimestamp(float(reset_at), timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            parsed = None
+    if parsed is None:
+        raw_value = str(reset_at or "").strip()
+        if raw_value:
+            try:
+                parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+            except ValueError:
+                try:
+                    parsed = datetime.fromtimestamp(float(raw_value), timezone.utc)
+                except (OSError, OverflowError, ValueError):
+                    parsed = None
+    if parsed is not None:
+        try:
+            return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+        except (OverflowError, OSError, ValueError):
+            pass
+
     try:
-        expiry = datetime.strptime(expiry_text, "%Y-%m-%d").date()
-    except ValueError:
-        return formatted
-    return f"{expiry.month}-{expiry.day}{formatted[len(expiry_text):]}"
-
-
-def _parse_reset_datetime(reset_at):
-    """Parse the ISO-8601 reset time returned by WLB into local time."""
-    raw_value = str(reset_at or "").strip()
-    if not raw_value:
+        seconds = float(reset_after)
+    except (TypeError, ValueError):
         return None
-    try:
-        parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
-    except ValueError:
+    if not math.isfinite(seconds) or seconds < 0:
         return None
-    return parsed.astimezone().replace(tzinfo=None) if parsed.tzinfo else parsed
+    return datetime.now().astimezone().replace(tzinfo=None) + timedelta(seconds=seconds)
 
 
-def _format_reset_datetime(reset_at) -> str:
-    """Format a WLB reset timestamp for the full-detail views."""
-    parsed = _parse_reset_datetime(reset_at)
+def _reset_parts(window):
+    """Return absolute and relative reset values from one usage window."""
+    if not isinstance(window, dict):
+        return None, None
+    reset_after = window.get("reset_after_seconds")
+    if reset_after is None:
+        reset_after = window.get("reset_after")
+    return window.get("reset_at"), reset_after
+
+
+def _window_used_percent(window):
+    """Return a window percentage, treating an absent rate limit as no data."""
+    if not isinstance(window, dict) or window.get("has_rate_limit", True) is False:
+        return None
+    return window.get("used_percent")
+
+
+def _format_reset_datetime(reset_at, reset_after=None) -> str:
+    """Format a reset timestamp for the full-detail views."""
+    parsed = _parse_reset_datetime(reset_at, reset_after)
     if parsed is not None:
         return parsed.strftime("%Y-%m-%d %H:%M:%S")
     return str(reset_at or "").strip()
 
 
-def _format_overview_reset(reset_at) -> str:
-    """Format a WLB reset date as M-D and add a short-term reminder."""
-    parsed = _parse_reset_datetime(reset_at)
+def _format_overview_reset_time(reset_at, reset_after=None) -> str:
+    """Format a reset time as HH:MM, or a clear placeholder."""
+    parsed = _parse_reset_datetime(reset_at, reset_after)
+    return parsed.strftime("%H:%M") if parsed is not None else "--:--"
+
+
+def _format_overview_reset_days(reset_at, reset_after=None) -> str:
+    """Format days until reset as N天, or a clear placeholder."""
+    parsed = _parse_reset_datetime(reset_at, reset_after)
     if parsed is None:
-        return _format_reset_datetime(reset_at)
-    days_left = (parsed.date() - datetime.now().date()).days
-    reminder = f"，还剩{days_left}天" if 0 <= days_left < 7 else ""
-    return f"{parsed.month}-{parsed.day}{reminder}"
+        return "--天"
+    days_left = max(0, (parsed.date() - datetime.now().date()).days)
+    return f"{days_left}天"
 
 
 # ── Plan tier definitions ──────────────────────────────────────
@@ -553,11 +592,13 @@ class TokenWidget(QWidget):
         lines = ["WLB"]
         if self._tp_data:
             d = self._tp_data
-            lines.append(f"剩余: {d.get('remaining_percent', 0):.2f}%")
-            lines.append(f"已用: {d.get('used_percent', 0):.2f}%")
+            remaining_pct = d.get("remaining_percent") if d.get("has_rate_limit", True) else None
+            used_pct = _window_used_percent(d)
+            lines.append(f"剩余: {remaining_pct:.2f}%" if remaining_pct is not None else "剩余: --")
+            lines.append(f"已用: {used_pct:.2f}%" if used_pct is not None else "已用: --")
             lines.append(f"窗口: {d.get('window', '7d')}")
             lines.append(f"总额: {d.get('total_percent', 100)}%")
-            reset_text = _format_reset_datetime(d.get("reset_at"))
+            reset_text = _format_reset_datetime(*_reset_parts(d))
             if reset_text:
                 lines.append(f"7日重置: {reset_text}")
             lines.append(f"状态: {'Active' if d.get('is_valid') else 'Inactive'}")
@@ -569,20 +610,23 @@ class TokenWidget(QWidget):
         mimo_pct = (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None
         lines.append(f"Token Plan: {self._format_overview_percent(mimo_pct, has_cookie)}")
         has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
-        tp_pct = self._tp_data.get("used_percent") if has_api_key and isinstance(self._tp_data, dict) else None
-        lines.append(f"WLB: {self._format_overview_percent(tp_pct, has_api_key)}")
-        tp_reset = (
-            self._tp_data.get("reset_at")
-            if has_api_key and isinstance(self._tp_data, dict)
-            else None
+        tp_weekly = self._tp_data if has_api_key and isinstance(self._tp_data, dict) else None
+        tp_daily = tp_weekly.get("daily") if isinstance(tp_weekly, dict) else None
+        tp_daily_pct = _window_used_percent(tp_daily)
+        tp_weekly_pct = _window_used_percent(tp_weekly)
+        lines.append(
+            f"WLB 日限额: {self._format_overview_percent(tp_daily_pct, has_api_key)}"
         )
-        reset_text = _format_reset_datetime(tp_reset)
+        lines.append(
+            f"WLB 周限额: {self._format_overview_percent(tp_weekly_pct, has_api_key)}"
+        )
+        reset_text = _format_reset_datetime(*_reset_parts(tp_weekly))
         if reset_text:
-            lines.append(f"WLB 重置: {reset_text}")
+            lines.append(f"WLB 周重置: {reset_text}")
         has_gpt = bool(self.cfg.get("gpt_session_cookie", "").strip()) or (isinstance(self._gpt_data, dict) and self._gpt_data.get("used_percent") is not None)
         gpt_pct = self._gpt_data.get("used_percent") if isinstance(self._gpt_data, dict) else None
         gpt_primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
-        primary_pct = gpt_primary.get("used_percent") if isinstance(gpt_primary, dict) else None
+        primary_pct = _window_used_percent(gpt_primary)
         lines.append(f"GPT 5\u5c0f\u65f6: {self._format_overview_percent(primary_pct, has_gpt)}")
         lines.append(f"GPT \u5468\u9650\u989d: {self._format_overview_percent(gpt_pct, has_gpt)}")
         return lines
@@ -1147,9 +1191,7 @@ class TokenWidget(QWidget):
             (
                 "WLB",
                 has_api_key,
-                self._tp_data.get("used_percent")
-                if has_api_key and self._tp_data is not None
-                else None,
+                _window_used_percent(self._tp_data) if has_api_key else None,
             ),
             (
                 "GPT \u5468\u9650\u989d",
@@ -1164,26 +1206,57 @@ class TokenWidget(QWidget):
             cell_x, label_y, bar_y, bar_w, bar_h = self._overview_row_metrics(idx)
 
             label_rect = QRect(cell_x, label_y - 14, bar_w, 18)
-            if idx == 2:
-                primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
-                secondary = self._gpt_data.get("secondary") if isinstance(self._gpt_data, dict) else None
-                secondary = secondary or (self._gpt_data if isinstance(self._gpt_data, dict) else None)
+            if idx in (1, 2):
+                if idx == 1:
+                    weekly = (
+                        self._tp_data
+                        if configured and isinstance(self._tp_data, dict)
+                        else None
+                    )
+                    primary = weekly.get("daily") if isinstance(weekly, dict) else None
+                    secondary = weekly
+                    primary_title = "WLB"
+                else:
+                    primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
+                    secondary = self._gpt_data.get("secondary") if isinstance(self._gpt_data, dict) else None
+                    secondary = secondary or (self._gpt_data if isinstance(self._gpt_data, dict) else None)
+                    primary_reset_at, primary_reset_after = _reset_parts(primary)
+                    primary_title = (
+                        f"GPT {_format_overview_reset_time(primary_reset_at, primary_reset_after)}"
+                    )
+                secondary_reset_at, secondary_reset_after = _reset_parts(secondary)
+                secondary_title = _format_overview_reset_days(
+                    secondary_reset_at, secondary_reset_after
+                )
                 primary_text = self._format_overview_percent(
-                    primary.get("used_percent") if isinstance(primary, dict) else None,
+                    _window_used_percent(primary),
                     configured,
                 )
                 secondary_text = self._format_overview_percent(
-                    secondary.get("used_percent") if isinstance(secondary, dict) else None,
+                    _window_used_percent(secondary),
                     configured,
                 )
                 p.setPen(QPen(TEXT_COLOR))
-                p.setFont(overview_font)
-                metrics = QFontMetrics(overview_font)
-                segment_width = (bar_w - GPT_BAR_GAP) // 2
-                for segment_x, title, percent_text in (
-                    (cell_x, "GPT 5\u5c0f\u65f6", primary_text),
-                    (cell_x + segment_width + GPT_BAR_GAP, "GPT \u5468", secondary_text),
-                ):
+                segment_width = (bar_w - DUAL_BAR_GAP) // 2
+                labels = (
+                    (cell_x, primary_title, primary_text),
+                    (cell_x + segment_width + DUAL_BAR_GAP, secondary_title, secondary_text),
+                )
+                for segment_x, title, percent_text in labels:
+                    label_font = QFont(overview_font)
+                    metrics = QFontMetrics(label_font)
+                    content_width = (
+                        metrics.horizontalAdvance(title)
+                        + metrics.horizontalAdvance(percent_text)
+                        + 4
+                    )
+                    if content_width > segment_width:
+                        label_font.setLetterSpacing(
+                            QFont.SpacingType.PercentageSpacing,
+                            max(50, int(segment_width / content_width * 100) - 5),
+                        )
+                        metrics = QFontMetrics(label_font)
+                    p.setFont(label_font)
                     segment_rect = QRect(segment_x, label_rect.y(), segment_width, label_rect.height())
                     title_width = max(0, segment_width - metrics.horizontalAdvance(percent_text) - 4)
                     p.drawText(
@@ -1196,20 +1269,12 @@ class TokenWidget(QWidget):
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                         percent_text,
                     )
-                self._draw_gpt_combined_bar(p, cell_x, bar_y, bar_w, bar_h, primary, secondary)
+                self._draw_dual_usage_bar(p, cell_x, bar_y, bar_w, bar_h, primary, secondary)
                 continue
 
             percent_text = self._format_overview_percent(raw_percent, configured)
-            if idx in (0, 1):
-                if idx == 0:
-                    suffix = _format_overview_expiry(self.cfg.get("expiry_date", ""))
-                else:
-                    reset_at = (
-                        self._tp_data.get("reset_at")
-                        if configured and isinstance(self._tp_data, dict)
-                        else None
-                    )
-                    suffix = _format_overview_reset(reset_at)
+            if idx == 0:
+                suffix = _format_overview_expiry(self.cfg.get("expiry_date", ""))
                 title_text = f"{name} {suffix}" if suffix else name
                 metrics = QFontMetrics(overview_font)
                 title_width = max(
@@ -1233,20 +1298,6 @@ class TokenWidget(QWidget):
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                     percent_text,
                 )
-            else:
-                p.setPen(QPen(TEXT_COLOR))
-                p.setFont(overview_font)
-                p.drawText(
-                    label_rect,
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                    name,
-                )
-                p.drawText(
-                    label_rect,
-                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                    percent_text,
-                )
-
             p.setBrush(QBrush(BAR_BG))
             p.drawRoundedRect(cell_x, bar_y, bar_w, bar_h, 4, 4)
 
@@ -1263,10 +1314,10 @@ class TokenWidget(QWidget):
                 p.drawRoundedRect(cell_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
                 p.restore()
 
-    def _draw_gpt_combined_bar(self, p: QPainter, x: int, y: int, width: int, height: int,
-                               primary: dict | None, secondary: dict | None):
-        """Draw two independent bars: left is 5-hour, right is weekly."""
-        gap = GPT_BAR_GAP
+    def _draw_dual_usage_bar(self, p: QPainter, x: int, y: int, width: int, height: int,
+                             primary: dict | None, secondary: dict | None):
+        """Draw two independent usage bars, leaving missing windows empty."""
+        gap = DUAL_BAR_GAP
         segment_width = (width - gap) // 2
         for segment_x, window in (
             (x, primary),
@@ -1326,7 +1377,7 @@ class TokenWidget(QWidget):
         p.setPen(QPen(ACCENT_GREEN if is_valid else ACCENT_RED if has_data else DIM))
         p.drawText(16, 98, f"状态: {status_text}")
 
-        reset_text = _format_reset_datetime(d.get("reset_at")) if has_data else ""
+        reset_text = _format_reset_datetime(*_reset_parts(d)) if has_data else ""
         if reset_text:
             p.setPen(QPen(DIM))
             reset_line = f"7日重置: {reset_text}"

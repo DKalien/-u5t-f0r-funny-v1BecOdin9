@@ -29,7 +29,7 @@ Python 模块采用单目录扁平结构：
 
 - **main.py** — 入口。单实例检查（Windows Mutex），创建 `QApplication`，加载配置，首次运行无 Cookie 时弹出 `SettingsDialog`，然后启动 `TokenWidget`；重启请求在事件循环结束并释放单实例锁后拉起新进程。
 - **config.py** — 配置管理。默认存储于本地外置 SQLite `D:\python\data\mimo-token-monitor\settings.db`，可由 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖，不通过 Git 同步；首次运行会从旧的 `~/.mimo-widget/config.json` 迁移，外置库不可用时保留 JSON 回退。主要字段包括 MiMo Cookie、刷新与显示设置、WLB 配置、GPT Session Cookie 和当前显示模式；完整默认值以 `config.py::DEFAULT_CONFIG` 为准。
-- **api_client.py** — API 客户端。包含 MiMo、WLB 与 GPT 5 小时/周限额查询；WLB 从 `/v1/usage` 的 `rate_limits` 精确读取 `7d` 窗口并保留 `reset_at`，供总览和详情显示重置时间；GPT 查询依次尝试本机 Codex 登录、ChatGPT Session Cookie 和本地会话记录，并对网络、429、5xx 瞬时失败重试一次。
+- **api_client.py** — API 客户端。包含 MiMo、WLB 与 GPT 5 小时/周限额查询；WLB 从 `/v1/usage` 的 `rate_limits` 精确读取 `7d` 窗口并保留既有扁平字段，同时从同一响应附加 `daily` 的 `1d` 窗口（缺少 `1d` 只显示无数据，不影响 `7d` 成功），供总览和详情显示；GPT 查询依次尝试本机 Codex 登录、ChatGPT Session Cookie 和本地会话记录，并对网络、429、5xx 瞬时失败重试一次。
 - **cookie_reader.py** — 浏览器 Cookie 自动读取。优先通过 CDP 从运行中的浏览器读取明文 Cookie（绕过 v20 加密），回退到 `browser_cookie3` 读取本地数据库。设置对话框「从浏览器导入」按钮调用此模块。
 - **playwright_session.py** — 可选的独立 Playwright 持久化登录会话。定时刷新和过期恢复默认使用 headless Chromium 读取最新 Cookie；需要首次登录或验证码时由用户从菜单手动续期，不使用现有 Chrome/Edge User Data。
 - **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）；托盘还通过后台线程显示 Codex Router 当前开关状态并提供元数据更新、启停和重启入口，以及重启悬浮窗入口。
@@ -55,7 +55,7 @@ Python 模块采用单目录扁平结构：
 - 单实例：使用 Windows Mutex 防止重复启动，并通过命名事件唤醒已有窗口；禁止把第二次启动保留在阻塞提示框中。
 - 进度条填充圆角动态调整：当填充宽度较小时，圆角半径限制为 `min(4, fill_w//2)`，避免超出外框圆角范围。
 - 今日用量计算：通过记录每天首次刷新时的月累计用量作为基准，后续刷新时计算差值得到今日用量。基准值持久化存储，程序重启不丢失数据。
-- GPT 5 小时与周限额在总览的同一条左右分段进度条中展示；刷新失败时保留上次成功数据，界面与 tooltip 会标明数据已过期，并展示本机 Codex 登录、ChatGPT Cookie、本地会话三路的具体失败原因。
+- 总览使用 9pt 单行双栏标签：Token Plan 标题显示剩余天数（无效日期不加后缀）；WLB 左侧固定为 `WLB`，右侧只显示周重置剩余天数；GPT 左侧显示 `GPT HH:MM` 主窗口重置时分，右侧只显示周重置剩余天数，缺失时分别为 `GPT --:--` 与 `--天`。WLB 日/周限额、GPT 5 小时/周限额均使用左右分段进度条，百分比右对齐且标签自动省略避免重叠。刷新失败时保留上次成功数据，界面与 tooltip 会标明数据已过期，并展示本机 Codex 登录、ChatGPT Cookie、本地会话三路的具体失败原因。
 - 日常启动器：`launcher.py` 会被打包成轻量的 `dist/MiMo-Token-Monitor.exe`，从项目根目录或 `dist` 启动时读取项目中的 `main.py`。业务源码变更后只需重启启动器；只有修改启动器时才运行 `./build-launcher.ps1`。完整独立发行版仍使用 `MiMo-Token-Monitor.spec`，轻量构建不得覆盖该 spec。
 - 代码同步：启动器先在代码仓库干净且本地分支落后时执行 `fetch` + `merge --ff-only`，不会为了拉取而覆盖本地修改；直接运行 `main.py` 以及退出/重启流程都不会自动提交或推送源码。
 - **红线规则**：PyQt6 在 Windows 上使用浮点数坐标调用 `QPainter.drawLine()` 会导致崩溃（退出码 `0xC0000409`）；所有 `drawLine()` 坐标必须使用整数，`QRectF`/`QPointF` 等其他 Qt 几何 API 不受此约束。

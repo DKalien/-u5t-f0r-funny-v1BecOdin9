@@ -160,7 +160,7 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
         if "isValid" not in data and "status" not in data and source is not data:
             is_valid = source.get("status") == "active"
 
-    return {
+    parsed = {
         "is_valid": bool(is_valid),
         "window": window,
         "used": used_val,
@@ -174,6 +174,11 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
         "has_rate_limit": True,
         "reset_at": entry.get("reset_at"),
     }
+    if window == "7d":
+        # Keep the established weekly fields flat while exposing the daily
+        # window from the same response.  A missing 1d entry is valid data.
+        parsed["daily"] = parse_third_party_usage(data, "1d")
+    return parsed
 
 
 def fetch_third_party_usage(base_url: str, api_key: str, window: str = "7d") -> dict:

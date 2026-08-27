@@ -77,6 +77,39 @@ class TestThirdPartyUsageParser(unittest.TestCase):
 
         self.assertIsNone(result["reset_at"])
 
+    @patch("api_client.requests.get")
+    def test_fetch_keeps_weekly_flat_and_attaches_daily(self, get):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "rate_limits": [
+                {"window": "1d", "used": 10, "limit": 50},
+                {"window": "7d", "used": 25, "limit": 100},
+            ]
+        }
+        get.return_value = response
+
+        result = fetch_third_party_usage("https://example.test", "test-key")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(get.call_count, 1)
+        self.assertEqual(result["data"]["window"], "7d")
+        self.assertEqual(result["data"]["used_percent"], 25.0)
+        self.assertEqual(result["data"]["daily"]["window"], "1d")
+        self.assertEqual(result["data"]["daily"]["used_percent"], 20.0)
+
+    @patch("api_client.requests.get")
+    def test_missing_daily_window_does_not_fail_weekly_fetch(self, get):
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "rate_limits": [{"window": "7d", "used": 25, "limit": 100}]
+        }
+        get.return_value = response
+
+        result = fetch_third_party_usage("https://example.test", "test-key")
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["data"]["daily"]["has_rate_limit"])
+
 
 class TestGPTWeeklyUsageParser(unittest.TestCase):
     def test_new_format_extracts_primary_and_secondary_windows(self):
