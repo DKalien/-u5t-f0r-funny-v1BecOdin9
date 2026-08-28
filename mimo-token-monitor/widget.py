@@ -1216,13 +1216,15 @@ class TokenWidget(QWidget):
                     primary = weekly.get("daily") if isinstance(weekly, dict) else None
                     secondary = weekly
                     primary_title = "WLB"
+                    primary_center_text = None
                 else:
                     primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
                     secondary = self._gpt_data.get("secondary") if isinstance(self._gpt_data, dict) else None
                     secondary = secondary or (self._gpt_data if isinstance(self._gpt_data, dict) else None)
                     primary_reset_at, primary_reset_after = _reset_parts(primary)
-                    primary_title = (
-                        f"GPT {_format_overview_reset_time(primary_reset_at, primary_reset_after)}"
+                    primary_title = "GPT"
+                    primary_center_text = _format_overview_reset_time(
+                        primary_reset_at, primary_reset_after
                     )
                 secondary_reset_at, secondary_reset_after = _reset_parts(secondary)
                 secondary_title = _format_overview_reset_days(
@@ -1239,17 +1241,22 @@ class TokenWidget(QWidget):
                 p.setPen(QPen(TEXT_COLOR))
                 segment_width = (bar_w - DUAL_BAR_GAP) // 2
                 labels = (
-                    (cell_x, primary_title, primary_text),
-                    (cell_x + segment_width + DUAL_BAR_GAP, secondary_title, secondary_text),
+                    (cell_x, primary_title, primary_center_text, primary_text),
+                    (
+                        cell_x + segment_width + DUAL_BAR_GAP,
+                        secondary_title,
+                        None,
+                        secondary_text,
+                    ),
                 )
-                for segment_x, title, percent_text in labels:
+                for segment_x, title, center_text, percent_text in labels:
                     label_font = QFont(overview_font)
                     metrics = QFontMetrics(label_font)
-                    content_width = (
-                        metrics.horizontalAdvance(title)
-                        + metrics.horizontalAdvance(percent_text)
-                        + 4
-                    )
+                    content_width = sum(
+                        metrics.horizontalAdvance(text)
+                        for text in (title, center_text, percent_text)
+                        if text
+                    ) + 4
                     if content_width > segment_width:
                         label_font.setLetterSpacing(
                             QFont.SpacingType.PercentageSpacing,
@@ -1264,6 +1271,12 @@ class TokenWidget(QWidget):
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                         metrics.elidedText(title, Qt.TextElideMode.ElideRight, title_width),
                     )
+                    if center_text:
+                        p.drawText(
+                            segment_rect,
+                            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
+                            center_text,
+                        )
                     p.drawText(
                         segment_rect,
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,

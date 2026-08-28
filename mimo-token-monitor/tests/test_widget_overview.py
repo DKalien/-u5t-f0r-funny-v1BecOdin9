@@ -93,7 +93,10 @@ class _OverviewPainter:
 
     def drawText(self, *args):
         rect = args[0] if isinstance(args[0], QRect) else None
-        self.text_records.append((rect, args[-1], self._pen.color(), QFont(self._font)))
+        alignment = args[1] if rect is not None and len(args) == 3 else None
+        self.text_records.append(
+            (rect, args[-1], self._pen.color(), QFont(self._font), alignment)
+        )
 
     def drawRoundedRect(self, *_args):
         pass
@@ -488,10 +491,24 @@ class TestWlbResetRendering(unittest.TestCase):
         self.assertEqual(
             texts,
             [
-                f"GPT {_format_overview_reset_time(primary_reset.timestamp())}",
+                "GPT",
+                _format_overview_reset_time(primary_reset.timestamp()),
                 "12.5%",
                 _format_overview_reset_days(None, 5 * 86400),
                 "42.5%",
+            ],
+        )
+        segment_width = (228 - DUAL_BAR_GAP) // 2
+        left_records = row_records[:3]
+        self.assertEqual(left_records[0][0].x(), 16)
+        self.assertEqual(left_records[1][0], QRect(16, 92, segment_width, 18))
+        self.assertEqual(left_records[2][0], QRect(16, 92, segment_width, 18))
+        self.assertEqual(
+            [record[4] for record in left_records],
+            [
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             ],
         )
         self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
@@ -513,7 +530,7 @@ class TestWlbResetRendering(unittest.TestCase):
         ]
         self.assertEqual(
             [record[1] for record in row_records],
-            ["GPT --:--", "12.5%", "--天", "42.5%"],
+            ["GPT", "--:--", "12.5%", "--天", "42.5%"],
         )
         w.close()
 
