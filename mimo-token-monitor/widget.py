@@ -1252,11 +1252,18 @@ class TokenWidget(QWidget):
                 for segment_x, title, center_text, percent_text in labels:
                     label_font = QFont(overview_font)
                     metrics = QFontMetrics(label_font)
-                    content_width = sum(
-                        metrics.horizontalAdvance(text)
-                        for text in (title, center_text, percent_text)
-                        if text
-                    ) + 4
+                    label_gap = 4
+                    # Reserve the widest percentage so digit changes do not move GPT's reset time.
+                    reserved_percent_width = metrics.horizontalAdvance("100.0%")
+                    content_width = (
+                        sum(
+                            metrics.horizontalAdvance(text)
+                            for text in (title, center_text)
+                            if text
+                        )
+                        + reserved_percent_width
+                        + label_gap
+                    )
                     if content_width > segment_width:
                         label_font.setLetterSpacing(
                             QFont.SpacingType.PercentageSpacing,
@@ -1265,7 +1272,8 @@ class TokenWidget(QWidget):
                         metrics = QFontMetrics(label_font)
                     p.setFont(label_font)
                     segment_rect = QRect(segment_x, label_rect.y(), segment_width, label_rect.height())
-                    title_width = max(0, segment_width - metrics.horizontalAdvance(percent_text) - 4)
+                    percent_width = metrics.horizontalAdvance(percent_text)
+                    title_width = max(0, segment_width - percent_width - label_gap)
                     p.drawText(
                         QRect(segment_rect.x(), segment_rect.y(), title_width, segment_rect.height()),
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,

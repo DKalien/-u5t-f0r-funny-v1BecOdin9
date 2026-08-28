@@ -514,6 +514,41 @@ class TestWlbResetRendering(unittest.TestCase):
         self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
         w.close()
 
+    def test_gpt_reset_time_position_is_centered_across_percent_digits(self):
+        primary_reset = datetime(2099, 9, 1, 12, 34, 56, tzinfo=timezone.utc)
+
+        def render_center_record(used_percent):
+            w = _make_widget(display_mode=OVERVIEW_MODE, gpt_session_cookie="k")
+            w._gpt_data = {
+                "used_percent": used_percent,
+                "primary": {
+                    "used_percent": used_percent,
+                    "reset_at": primary_reset.timestamp(),
+                },
+                "secondary": {"used_percent": 42.5, "reset_after": 5 * 86400},
+            }
+            painter = _OverviewPainter()
+            w._paint_overview(painter)
+            center_record = next(
+                record
+                for record in painter.text_records
+                if record[0]
+                and record[0].y() == 92
+                and record[4]
+                == Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+            )
+            w.close()
+            return center_record
+
+        one_digit = render_center_record(9.0)
+        two_digits = render_center_record(10.0)
+
+        expected_center_x = QRect(16, 92, (228 - DUAL_BAR_GAP) // 2, 18).center().x()
+        self.assertEqual(one_digit[0].center().x(), expected_center_x)
+        self.assertEqual(two_digits[0].center().x(), expected_center_x)
+        self.assertEqual(one_digit[0], two_digits[0])
+        self.assertEqual(one_digit[3], two_digits[3])
+
     def test_overview_gpt_missing_reset_uses_placeholders(self):
         w = _make_widget(display_mode=OVERVIEW_MODE, gpt_session_cookie="k")
         w._gpt_data = {
