@@ -1222,10 +1222,11 @@ class TokenWidget(QWidget):
                     secondary = self._gpt_data.get("secondary") if isinstance(self._gpt_data, dict) else None
                     secondary = secondary or (self._gpt_data if isinstance(self._gpt_data, dict) else None)
                     primary_reset_at, primary_reset_after = _reset_parts(primary)
-                    primary_title = "GPT"
-                    primary_center_text = _format_overview_reset_time(
+                    primary_reset_text = _format_overview_reset_time(
                         primary_reset_at, primary_reset_after
                     )
+                    primary_title = f"GPT - {primary_reset_text}"
+                    primary_center_text = None
                 secondary_reset_at, secondary_reset_after = _reset_parts(secondary)
                 secondary_title = _format_overview_reset_days(
                     secondary_reset_at, secondary_reset_after
