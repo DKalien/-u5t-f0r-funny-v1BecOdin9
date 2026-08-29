@@ -430,7 +430,7 @@ class TestWlbResetRendering(unittest.TestCase):
         ).replace(microsecond=0).isoformat()
         w = _make_widget(display_mode=OVERVIEW_MODE, third_party_api_key="k")
         w._tp_data = {
-            "daily": {"used_percent": 12.5},
+            "daily": {"used_percent": 12.5, "reset_at": reset_at},
             "used_percent": 42.5,
             "remaining_percent": 57.5,
             "window": "7d",
@@ -445,7 +445,10 @@ class TestWlbResetRendering(unittest.TestCase):
             record for record in painter.text_records if record[0] and record[0].y() == 58
         ]
         texts = [record[1] for record in row_records]
-        self.assertEqual(texts, ["WLB", "12.5%", "5天", "42.5%"])
+        self.assertEqual(
+            texts,
+            [f"WLB - {_format_overview_reset_time(reset_at)}", "12.5%", "5天", "42.5%"],
+        )
         self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
         self.assertFalse(any("重置" in text or "还剩" in text for text in texts))
         self.assertTrue(all(record[2] == TEXT_COLOR for record in row_records))
@@ -468,7 +471,7 @@ class TestWlbResetRendering(unittest.TestCase):
             record for record in painter.text_records if record[0] and record[0].y() == 58
         ]
         texts = [record[1] for record in row_records]
-        self.assertEqual(texts, ["WLB", "--", "--天", "42.5%"])
+        self.assertEqual(texts, ["WLB - --:--", "--", "--天", "42.5%"])
         self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
         w.close()
 

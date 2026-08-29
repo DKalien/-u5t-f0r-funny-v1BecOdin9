@@ -160,6 +160,10 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
         if "isValid" not in data and "status" not in data and source is not data:
             is_valid = source.get("status") == "active"
 
+    reset_after = entry.get("reset_after_seconds")
+    if reset_after is None:
+        reset_after = entry.get("reset_after")
+
     parsed = {
         "is_valid": bool(is_valid),
         "window": window,
@@ -173,6 +177,7 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
         "unit": "%",
         "has_rate_limit": True,
         "reset_at": entry.get("reset_at"),
+        "reset_after_seconds": reset_after,
     }
     if window == "7d":
         # Keep the established weekly fields flat while exposing the daily

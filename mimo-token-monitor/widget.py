@@ -1215,7 +1215,11 @@ class TokenWidget(QWidget):
                     )
                     primary = weekly.get("daily") if isinstance(weekly, dict) else None
                     secondary = weekly
-                    primary_title = "WLB"
+                    primary_reset_at, primary_reset_after = _reset_parts(primary)
+                    primary_reset_text = _format_overview_reset_time(
+                        primary_reset_at, primary_reset_after
+                    )
+                    primary_title = f"WLB - {primary_reset_text}"
                     primary_center_text = None
                 else:
                     primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None

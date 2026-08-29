@@ -77,6 +77,16 @@ class TestThirdPartyUsageParser(unittest.TestCase):
 
         self.assertIsNone(result["reset_at"])
 
+    def test_preserves_relative_reset_seconds(self):
+        data = {
+            "rate_limits": [
+                {"window": "1d", "used": 25, "limit": 100, "reset_after": 0}
+            ]
+        }
+        result = parse_third_party_usage(data, "1d")
+
+        self.assertEqual(result["reset_after_seconds"], 0)
+
     @patch("api_client.requests.get")
     def test_fetch_keeps_weekly_flat_and_attaches_daily(self, get):
         response = Mock(status_code=200)
