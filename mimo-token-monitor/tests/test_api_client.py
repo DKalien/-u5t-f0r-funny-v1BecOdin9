@@ -107,6 +107,34 @@ class TestThirdPartyUsageParser(unittest.TestCase):
         self.assertEqual(result["data"]["daily"]["window"], "1d")
         self.assertEqual(result["data"]["daily"]["used_percent"], 20.0)
 
+    def test_daily_usage_is_capped_by_weekly_remaining(self):
+        result = parse_third_party_usage(
+            {
+                "rate_limits": [
+                    {
+                        "window": "1d",
+                        "used": 19.345675,
+                        "limit": 50,
+                        "remaining": 30.654325,
+                    },
+                    {
+                        "window": "7d",
+                        "used": 120.020837,
+                        "limit": 120,
+                        "remaining": 0,
+                    },
+                ]
+            }
+        )
+
+        daily = result["daily"]
+        self.assertAlmostEqual(daily["used"], 19.345675)
+        self.assertAlmostEqual(daily["limit"], 50.0)
+        self.assertAlmostEqual(daily["remaining"], 30.654325)
+        self.assertEqual(daily["used_percent"], 100.0)
+        self.assertEqual(daily["remaining_percent"], 0.0)
+        self.assertEqual(result["used_percent"], 100.02)
+
     @patch("api_client.requests.get")
     def test_missing_daily_window_does_not_fail_weekly_fetch(self, get):
         response = Mock(status_code=200)

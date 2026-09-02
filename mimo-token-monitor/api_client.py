@@ -182,7 +182,14 @@ def parse_third_party_usage(data, window: str = "7d") -> dict:
     if window == "7d":
         # Keep the established weekly fields flat while exposing the daily
         # window from the same response.  A missing 1d entry is valid data.
-        parsed["daily"] = parse_third_party_usage(data, "1d")
+        daily = parse_third_party_usage(data, "1d")
+        if daily["has_rate_limit"] and limit_val > 0:
+            effective_remaining = max(0.0, min(daily["remaining"], remaining_val))
+            effective_limit = daily["used"] + effective_remaining
+            if effective_limit > 0:
+                daily["used_percent"] = round(daily["used"] / effective_limit * 100, 2)
+                daily["remaining_percent"] = round(effective_remaining / effective_limit * 100, 2)
+        parsed["daily"] = daily
     return parsed
 
 
