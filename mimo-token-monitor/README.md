@@ -123,7 +123,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   - 双击托盘图标：恢复显示悬浮窗
   - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / 更新模型元数据 /
     路由控制 / 重启悬浮窗 / 退出
-  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；可开启、关闭或重启 Codex Router
+  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；可切换到 WLB / GPT，也可开启、关闭或重启 Codex Router
   - 重启悬浮窗：退出当前进程并释放单实例锁后启动新实例
   - 悬停托盘图标：显示用量概览
 
@@ -132,18 +132,24 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - 需要先安装 Codex Router；程序默认从
   `~/.codex/codex-router/install-manifest.json` 读取当前源码目录。
 - “更新模型元数据”依次运行 `node src/catalog.mjs` 和
-  `node src/service.mjs restart`，更新失败时不会继续重启。
+  `node src/service.mjs restart`，更新失败时不会继续重启；此操作供旧手工目录维护，官方目录无需执行。
+- “切换到 WLB”和“切换到 GPT”调用 Router 的 `gpt-route.mjs wlb|official`，
+  不重启服务、不自动开启 Router。请先开启路由；切换影响所有任务后续的 GPT 请求。
+  菜单勾选已确认的当前服务商，总览对应的 WLB / GPT 整行标题文字显示绿色；WLB
+  单独页面的标题也同步变绿。官方直连时标记 GPT；状态未知或 Router 不健康时不高亮。
 - “开启路由”和“关闭路由”复用路由器的 `codex-router.ps1 enable|disable`，因此会
   同步调整 Codex 配置和后台服务；“重启路由器”只重启现有服务。
-- 程序启动后及关闭托盘菜单时，会在后台调用 `node src/config-manager.mjs status`，
+- 程序启动后、关闭托盘菜单时及每 30 秒，会在后台调用 `node src/status.mjs --json`，
   缓存并在下次打开菜单时显示路由已开启或已关闭；检测失败时显示“状态未知”。菜单
   关闭后的状态刷新会延迟到事件循环下一轮，避免点击启停后被旧状态刷新竞态覆盖。
+  菜单可见或已有操作运行时跳过轮询；切换成功后立即刷新高亮和勾选。
+  后台状态检查中点击切换，会等待检查完成后串行执行。
 - 所有操作均在后台线程执行。执行期间路由菜单会暂时禁用；悬浮窗底部显示“正在…”状态，
   完成后显示成功或失败摘要并在 5 秒后清除，同时保留托盘通知。为避免中途销毁线程，
   操作完成前不能退出程序。
 - 路由源码根目录优先取 `MIMO_TOKEN_MONITOR_ROUTER_ROOT`；未设置时读取 `$CODEX_HOME`
   （默认 `~/.codex`）下 `codex-router/install-manifest.json` 的
-  `current.sourceRoot`，并校验所需入口文件。状态使用 `node src/config-manager.mjs status`，
+  `current.sourceRoot`，并校验所需入口文件。状态使用 `node src/status.mjs --json`，
   更新元数据使用 `node src/catalog.mjs` 后重启服务，启停使用
   `codex-router.ps1 enable|disable`，重启使用 `node src/service.mjs restart`。
 

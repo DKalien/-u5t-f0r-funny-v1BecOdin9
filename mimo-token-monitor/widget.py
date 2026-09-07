@@ -429,7 +429,11 @@ class TokenWidget(QWidget):
         self._router_status_timer.timeout.connect(self._clear_router_status)
         self._pin_btn_rect = QRect()  # placeholder, set in paintEvent
         self._router_worker: RouterWorker | None = None
+        self._queued_router_operation: str | None = None
         self._router_actions: list[QAction] = []
+        self._gpt_route: str | None = None
+        self._router_poll_timer = QTimer(self)
+        self._router_poll_timer.timeout.connect(self._refresh_router_state)
         self._playwright_worker: PlaywrightCookieWorker | None = None
         self._playwright_timer = QTimer(self)
         self._playwright_timer.timeout.connect(self._refresh_playwright_cookie)
@@ -683,6 +687,17 @@ class TokenWidget(QWidget):
 
         router_menu = tray_menu.addMenu("路由控制（状态未知）")
         self._router_menu_action = router_menu.menuAction()
+        self._gpt_route_actions = {}
+        for route, title in (("wlb", "切换到 WLB"), ("official", "切换到 GPT")):
+            action = router_menu.addAction(title)
+            action.setCheckable(True)
+            action.setToolTip("全局切换：影响所有任务后续的 GPT 请求")
+            operation = "route-wlb" if route == "wlb" else "route-official"
+            action.triggered.connect(
+                lambda _checked=False, operation=operation: self._start_router_operation(operation)
+            )
+            self._gpt_route_actions[route] = action
+        router_menu.addSeparator()
         enable_act = router_menu.addAction("开启路由")
         enable_act.triggered.connect(
             lambda _checked=False: self._start_router_operation("enable")
@@ -696,7 +711,10 @@ class TokenWidget(QWidget):
         restart_act.triggered.connect(
             lambda _checked=False: self._start_router_operation("restart")
         )
-        self._router_actions = [metadata_act, enable_act, disable_act, restart_act]
+        self._router_actions = [
+            metadata_act, enable_act, disable_act, restart_act,
+            *self._gpt_route_actions.values(),
+        ]
         tray_menu.aboutToHide.connect(
             lambda: QTimer.singleShot(0, self._refresh_router_state)
         )
@@ -722,15 +740,26 @@ class TokenWidget(QWidget):
         self._tray_icon.show()
         if QSystemTrayIcon.isSystemTrayAvailable():
             self._refresh_router_state()
+            self._router_poll_timer.start(30_000)
 
     def _set_router_state(self, enabled: bool | None):
         state = "状态未知" if enabled is None else "已开启" if enabled else "已关闭"
         self._router_menu_action.setText(f"路由控制（{state}）")
 
+    def _set_gpt_route(self, route: str | None):
+        previous = self._gpt_route
+        self._gpt_route = route if route in {"official", "wlb"} else None
+        for name, action in self._gpt_route_actions.items():
+            action.setChecked(name == self._gpt_route)
+        if previous != self._gpt_route:
+            self.update()
+
     def _refresh_router_state(self):
         if self._exit_requested:
             return
-        if self._router_worker is not None and self._router_worker.isRunning():
+        if self._tray_menu.isVisible():
+            return
+        if self._router_worker is not None:
             return
         self._router_worker = RouterWorker("status", self)
         self._router_worker.completed.connect(self._on_router_status_done)
@@ -748,6 +777,11 @@ class TokenWidget(QWidget):
     def _on_router_status_done(self, result: router_control.RouterResult):
         self._finish_router_worker()
         self._set_router_state(result.route_enabled if result.ok else None)
+        self._set_gpt_route(result.gpt_route if result.ok else None)
+        if self._queued_router_operation is not None:
+            operation = self._queued_router_operation
+            self._queued_router_operation = None
+            self._start_router_operation(operation)
 
     def _set_router_status(
         self, message: str, ok: bool | None = None, clear_after: int = 0
@@ -769,7 +803,16 @@ class TokenWidget(QWidget):
     def _start_router_operation(self, operation: str):
         if self._exit_requested:
             return
-        if self._router_worker is not None and self._router_worker.isRunning():
+        # QAction 点击会自动勾选；只展示已确认成功的实际路由。
+        self._set_gpt_route(self._gpt_route)
+        if self._router_worker is not None:
+            # 后台轮询不应吞掉菜单点击；检查结束后串行执行这次操作。
+            if self._router_worker.operation == "status":
+                self._queued_router_operation = operation
+                for action in self._router_actions:
+                    action.setEnabled(False)
+                self._set_router_status("等待路由状态检查完成...")
+                return
             self._tray_icon.showMessage(
                 "Codex Router",
                 "已有路由操作正在进行",
@@ -783,6 +826,8 @@ class TokenWidget(QWidget):
             "enable": "正在开启路由...",
             "disable": "正在关闭路由...",
             "restart": "正在重启路由器...",
+            "route-wlb": "正在切换到 WLB...",
+            "route-official": "正在切换到 GPT...",
         }
         for action in self._router_actions:
             action.setEnabled(False)
@@ -805,6 +850,7 @@ class TokenWidget(QWidget):
             self._set_router_state(result.route_enabled)
         elif not result.ok:
             self._set_router_state(None)
+        self._set_gpt_route(result.gpt_route if result.ok else None)
 
         summary = result.message or ("路由操作成功" if result.ok else "路由操作失败")
         self._set_router_status(summary, result.ok, clear_after=5000)
@@ -833,8 +879,11 @@ class TokenWidget(QWidget):
         display_mode = self.cfg.get("display_mode", MIMO_MODE)
         font_title = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         p.setFont(font_title)
-        p.setPen(QPen(TEXT_COLOR))
         title_text = "总览" if display_mode == OVERVIEW_MODE else ("MiMo Token" if display_mode == MIMO_MODE else "WLB")
+        p.setPen(QPen(
+            ACCENT_GREEN if display_mode == THIRD_PARTY_MODE and self._gpt_route == "wlb"
+            else TEXT_COLOR
+        ))
         p.drawText(16, 22, title_text)
 
         # Mode switch icon right after title
@@ -1243,7 +1292,8 @@ class TokenWidget(QWidget):
                     _window_used_percent(secondary),
                     configured,
                 )
-                p.setPen(QPen(TEXT_COLOR))
+                active_route = "wlb" if idx == 1 else "official"
+                p.setPen(QPen(ACCENT_GREEN if self._gpt_route == active_route else TEXT_COLOR))
                 segment_width = (bar_w - DUAL_BAR_GAP) // 2
                 labels = (
                     (cell_x, primary_title, primary_center_text, primary_text),
@@ -1642,6 +1692,7 @@ class TokenWidget(QWidget):
         self.setEnabled(False)
         self._timer.stop()
         self._playwright_timer.stop()
+        self._router_poll_timer.stop()
         if self._playwright_worker is not None and self._playwright_worker.isRunning():
             self._playwright_worker.wait(5000)
         if self._exit_callback is not None:

@@ -97,8 +97,33 @@ class TestExitRuntime(unittest.TestCase):
             self.assertIsNotNone(router_menu)
             self.assertEqual(
                 [action.text() for action in router_menu.actions() if not action.isSeparator()],
-                ["开启路由", "关闭路由", "重启路由器"],
+                ["切换到 WLB", "切换到 GPT", "开启路由", "关闭路由", "重启路由器"],
             )
+
+    def test_route_switch_actions_and_confirmed_selection(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            widget._tray_icon.showMessage = Mock()
+            widget._set_gpt_route("official")
+            self.assertTrue(widget._gpt_route_actions["official"].isChecked())
+            self.assertFalse(widget._gpt_route_actions["wlb"].isChecked())
+            with patch.object(widget, "_start_router_operation") as start:
+                widget._gpt_route_actions["wlb"].trigger()
+                start.assert_called_once_with("route-wlb")
+                start.reset_mock()
+                widget._gpt_route_actions["official"].trigger()
+                start.assert_called_once_with("route-official")
+
+            widget._router_worker = Mock()
+            widget._on_router_operation_done(
+                RouterResult(True, "已切换到 WLB", route_enabled=True, gpt_route="wlb")
+            )
+            self.assertEqual(widget._gpt_route, "wlb")
+            self.assertTrue(widget._gpt_route_actions["wlb"].isChecked())
+            self.assertFalse(widget._gpt_route_actions["official"].isChecked())
+            widget._router_worker = Mock()
+            widget._on_router_operation_done(RouterResult(False, "切换失败"))
+            self.assertIsNone(widget._gpt_route)
+            self.assertFalse(any(action.isChecked() for action in widget._gpt_route_actions.values()))
 
     def test_router_status_updates_tray_menu(self):
         with managed_widget({"position": [100, 100]}) as widget:
@@ -117,6 +142,20 @@ class TestExitRuntime(unittest.TestCase):
             )
 
             self.assertEqual(widget._router_menu_action.text(), "路由控制（已关闭）")
+
+    def test_route_click_waits_for_background_status_then_runs(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            widget._router_worker = Mock(operation="status")
+            widget._router_worker.isRunning.return_value = True
+            widget._start_router_operation("route-wlb")
+            self.assertEqual(widget._queued_router_operation, "route-wlb")
+            self.assertFalse(any(action.isEnabled() for action in widget._router_actions))
+            with patch.object(widget, "_start_router_operation") as start:
+                widget._on_router_status_done(
+                    RouterResult(True, "路由已开启", route_enabled=True, gpt_route="official")
+                )
+                start.assert_called_once_with("route-wlb")
+            self.assertIsNone(widget._queued_router_operation)
 
     def test_router_status_refresh_keeps_visible_menu_stable(self):
         with managed_widget({"position": [100, 100]}) as widget:

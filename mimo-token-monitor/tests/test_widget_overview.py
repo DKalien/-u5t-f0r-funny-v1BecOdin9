@@ -46,7 +46,7 @@ from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT, DUAL_BAR_GAP,
-    BG_COLOR, TEXT_COLOR, _format_overview_expiry,
+    BG_COLOR, TEXT_COLOR, ACCENT_GREEN, _format_overview_expiry,
     _parse_reset_datetime, _format_overview_reset_time, _format_overview_reset_days,
 )
 from router_control import RouterResult  # noqa: E402
@@ -453,6 +453,25 @@ class TestWlbResetRendering(unittest.TestCase):
         self.assertFalse(any("重置" in text or "还剩" in text for text in texts))
         self.assertTrue(all(record[2] == TEXT_COLOR for record in row_records))
         w.close()
+
+    def test_active_provider_header_is_green_and_other_headers_stay_white(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            for route in ("wlb", "official", None):
+                with self.subTest(route=route):
+                    w._set_gpt_route(route)
+                    painter = _OverviewPainter()
+                    w._paint_overview(painter)
+                    for row_y, provider in ((58, "wlb"), (92, "official")):
+                        records = [r for r in painter.text_records if r[0] and r[0].y() == row_y]
+                        self.assertTrue(records)
+                        expected = ACCENT_GREEN if route == provider else TEXT_COLOR
+                        self.assertTrue(all(r[2] == expected for r in records))
+                    token_title = next(r for r in painter.text_records if r[1].startswith("Token Plan"))
+                    self.assertEqual(token_title[2], TEXT_COLOR)
+        finally:
+            w.close()
+            w.deleteLater()
 
     def test_overview_wlb_missing_daily_window_shows_no_data(self):
         w = _make_widget(display_mode=OVERVIEW_MODE, third_party_api_key="k")

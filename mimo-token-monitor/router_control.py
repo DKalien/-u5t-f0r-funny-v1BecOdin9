@@ -22,6 +22,7 @@ class RouterResult:
     message: str
     detail: str = ""
     route_enabled: bool | None = None
+    gpt_route: str | None = None
 
 
 def resolve_router_root(environ: Mapping[str, str] | None = None) -> Path:
@@ -45,7 +46,9 @@ def resolve_router_root(environ: Mapping[str, str] | None = None) -> Path:
         root / "codex-router.ps1",
         root / "src" / "catalog.mjs",
         root / "src" / "config-manager.mjs",
+        root / "src" / "gpt-route.mjs",
         root / "src" / "service.mjs",
+        root / "src" / "status.mjs",
     )
     if not all(path.is_file() for path in required):
         raise RuntimeError(f"Codex Router 目录无效：{root}")
@@ -56,10 +59,16 @@ def _commands(operation: str, root: Path) -> list[list[str]]:
     node = "node"
     catalog = str(root / "src" / "catalog.mjs")
     service = str(root / "src" / "service.mjs")
-    config_manager = str(root / "src" / "config-manager.mjs")
+    gpt_route = str(root / "src" / "gpt-route.mjs")
+    status = str(root / "src" / "status.mjs")
     script = str(root / "codex-router.ps1")
     if operation == "status":
-        return [[node, config_manager, "status"]]
+        return [[node, status, "--json"]]
+    if operation in {"route-wlb", "route-official"}:
+        return [
+            [node, status, "--json"],
+            [node, gpt_route, operation.removeprefix("route-")],
+        ]
     if operation == "refresh":
         return [[node, catalog], [node, service, "restart"]]
     if operation == "restart":
@@ -98,6 +107,82 @@ def _failure_detail(result: subprocess.CompletedProcess) -> str:
     return (output.splitlines()[-1] if output else f"命令退出码 {result.returncode}")[:500]
 
 
+def _parse_json_object(value) -> dict | None:
+    try:
+        parsed = json.loads(_decode(value))
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _status_result(label: str, result: subprocess.CompletedProcess) -> RouterResult:
+    payload = _parse_json_object(result.stdout)
+    if payload is None:
+        return RouterResult(False, f"{label}失败", "路由器返回了无效状态")
+
+    config = payload.get("config")
+    health = payload.get("health")
+    gpt_route = payload.get("gptRoute")
+    if not all(isinstance(value, dict) for value in (config, health, gpt_route)):
+        return RouterResult(False, f"{label}失败", "路由器返回了无效状态")
+
+    mode = config.get("mode")
+    managed = config.get("managed") is True
+    route_enabled = (
+        True if mode == "router" and managed else False if mode == "native" else None
+    )
+    actual_route = None
+    if mode == "native":
+        actual_route = "official"
+    elif (
+        mode == "router"
+        and managed
+        and health.get("ok") is True
+        and gpt_route.get("mode") in {"official", "wlb"}
+        and gpt_route.get("readable") is True
+        and gpt_route.get("ready") is True
+    ):
+        actual_route = gpt_route["mode"]
+
+    if mode == "native":
+        message = "官方直连"
+    elif route_enabled and actual_route is not None:
+        message = "路由已开启"
+    elif route_enabled:
+        message = "路由未就绪"
+    else:
+        message = "路由状态未知"
+    detail = "路由器尚未就绪" if result.returncode == 1 else ""
+    return RouterResult(
+        True,
+        message,
+        detail,
+        route_enabled=route_enabled,
+        gpt_route=actual_route,
+    )
+
+
+def _route_precheck(label: str, result: subprocess.CompletedProcess) -> RouterResult | None:
+    payload = _parse_json_object(result.stdout)
+    if payload is None:
+        return RouterResult(False, f"{label}失败", "路由器返回了无效状态")
+    config = payload.get("config")
+    health = payload.get("health")
+    if not (
+        isinstance(config, dict)
+        and isinstance(health, dict)
+        and config.get("mode") == "router"
+        and config.get("managed") is True
+        and health.get("ok") is True
+    ):
+        return RouterResult(
+            False,
+            f"{label}失败",
+            "请先开启路由并确保路由器已健康运行后再切换 GPT 路由",
+        )
+    return None
+
+
 def run_router_operation(
     operation: str,
     *,
@@ -111,6 +196,8 @@ def run_router_operation(
         "enable": "开启路由",
         "disable": "关闭路由",
         "restart": "重启路由器",
+        "route-wlb": "切换 GPT 路由",
+        "route-official": "切换 GPT 路由",
     }
     label = labels.get(operation, "路由操作")
     try:
@@ -119,7 +206,8 @@ def run_router_operation(
     except (RuntimeError, ValueError) as exc:
         return RouterResult(False, f"{label}失败", str(exc))
 
-    for command in commands:
+    child_env = None if environ is None else dict(environ)
+    for index, command in enumerate(commands):
         try:
             result = runner(
                 command,
@@ -129,6 +217,7 @@ def run_router_operation(
                 stdin=subprocess.DEVNULL,
                 timeout=timeout_seconds,
                 check=False,
+                env=child_env,
                 **hidden_subprocess_kwargs(),
             )
         except subprocess.TimeoutExpired:
@@ -136,30 +225,39 @@ def run_router_operation(
         except OSError as exc:
             return RouterResult(False, f"{label}失败", str(exc))
         if result.returncode != 0:
-            return RouterResult(False, f"{label}失败", _failure_detail(result))
+            accepts_not_ready = operation == "status" or (
+                operation in {"route-wlb", "route-official"} and index == 0
+            )
+            if not (accepts_not_ready and result.returncode == 1):
+                return RouterResult(False, f"{label}失败", _failure_detail(result))
+        if operation in {"route-wlb", "route-official"} and index == 0:
+            failure = _route_precheck(label, result)
+            if failure is not None:
+                return failure
 
     if operation == "status":
-        try:
-            mode = json.loads(_decode(result.stdout))["mode"]
-            if mode not in {"router", "native"}:
-                raise ValueError
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            return RouterResult(False, f"{label}失败", "路由器返回了无效状态")
-        enabled = mode == "router"
-        return RouterResult(
-            True,
-            "路由已开启" if enabled else "路由已关闭",
-            route_enabled=enabled,
-        )
+        return _status_result(label, result)
 
     messages = {
         "refresh": "模型元数据已更新，路由器已重启",
         "enable": "路由已开启",
         "disable": "路由已关闭",
         "restart": "路由器已重启",
+        "route-wlb": "GPT 路由已切换到 WLB",
+        "route-official": "GPT 路由已切换到官方",
     }
+    target_route = {
+        "route-wlb": "wlb",
+        "route-official": "official",
+    }.get(operation)
     return RouterResult(
         True,
         messages[operation],
-        route_enabled={"enable": True, "disable": False}.get(operation),
+        route_enabled={
+            "enable": True,
+            "disable": False,
+            "route-wlb": True,
+            "route-official": True,
+        }.get(operation),
+        gpt_route=target_route,
     )
