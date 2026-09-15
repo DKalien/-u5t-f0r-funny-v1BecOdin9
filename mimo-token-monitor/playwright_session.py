@@ -12,7 +12,11 @@ from typing import Any, Callable
 MIMO_URL = "https://platform.xiaomimimo.com/#/console/balance"
 TARGET_URL = MIMO_URL
 COOKIE_DOMAIN = "xiaomimimo.com"
+SERVICE_TOKEN_COOKIE = "api-platform_serviceToken"
 DEFAULT_USER_DATA_DIR = Path(tempfile.gettempdir()) / "mimo-token-monitor-playwright"
+# Xiaomi SSO 往往在首屏之后再跳回平台并种下 serviceToken，需要多等一会儿。
+SSO_SETTLE_SECONDS = 2
+SSO_POLL_SECONDS = 1
 
 
 class PlaywrightSessionError(RuntimeError):
@@ -34,6 +38,15 @@ def _load_sync_playwright() -> Callable[[], Any]:
 def _is_mimo_domain(domain: object) -> bool:
     value = str(domain or "").lstrip(".").rstrip(".").lower()
     return value == COOKIE_DOMAIN or value.endswith(f".{COOKIE_DOMAIN}")
+
+
+def _cookie_sort_key(cookie: dict[str, Any]) -> tuple[int, str]:
+    name = str(cookie.get("name") or "")
+    if name == SERVICE_TOKEN_COOKIE:
+        return (0, name)
+    if "token" in name.lower() or name.startswith("api-platform"):
+        return (1, name)
+    return (2, name)
 
 
 def _is_browser_profile_path(path: Path) -> bool:
@@ -116,6 +129,18 @@ class PlaywrightSession:
                 f"打开 MiMo 平台页面失败（{type(exc).__name__}）"
             ) from exc
 
+    def _page_url(self) -> str:
+        context = self._context
+        if context is None:
+            return ""
+        try:
+            pages = context.pages
+            if not pages:
+                return ""
+            return str(pages[0].url or "")
+        except Exception:
+            return ""
+
     def get_cookie(self) -> str:
         """读取 xiaomimimo.com Cookie，并拼成请求头格式字符串。"""
         context = self.start()
@@ -134,9 +159,16 @@ class PlaywrightSession:
             ) from exc
 
         if not matched:
+            page_url = self._page_url()
+            if "account.xiaomi.com" in page_url or "/service/login" in page_url:
+                raise PlaywrightSessionError(
+                    "小米账号 SSO 尚未完成，平台 Cookie 还未写入；"
+                    "请等待自动跳转，或在打开的浏览器中完成登录"
+                )
             raise PlaywrightSessionError(
                 "未找到 xiaomimimo.com Cookie，请先在会话页面登录 MiMo"
             )
+        matched.sort(key=_cookie_sort_key)
         return "; ".join(f"{cookie['name']}={cookie['value']}" for cookie in matched)
 
     def refresh_cookie(
@@ -145,28 +177,46 @@ class PlaywrightSession:
         interactive: bool = False,
         timeout_seconds: int = 30,
         previous_cookie: str | None = None,
+        cookie_validator: Callable[[str], bool] | None = None,
     ) -> str:
-        """访问受保护控制台并读取 Cookie；可等待旧 Cookie 被替换。"""
+        """访问受保护控制台并读取 Cookie；可等待 SSO 完成或校验通过。"""
         if timeout_seconds <= 0:
             raise PlaywrightSessionError("Cookie 刷新超时必须大于 0 秒")
         self.headless = not interactive
-        page = self.open_mimo(timeout=timeout_seconds * 1000)
+        page = self.open_mimo(timeout=min(timeout_seconds * 1000, 60_000))
         wait_for_timeout = getattr(page, "wait_for_timeout", None)
         if wait_for_timeout is not None:
-            wait_for_timeout(min(3000, timeout_seconds * 1000))
-        if not interactive and previous_cookie is None:
-            return self.get_cookie()
+            wait_for_timeout(min(int(SSO_SETTLE_SECONDS * 1000), timeout_seconds * 1000))
 
+        # 始终轮询到超时：serviceToken 常在首屏跳转/SSO 之后才出现，
+        # 不能在打开后立刻读一次就失败。
         deadline = time.monotonic() + timeout_seconds
         last_error = ""
+        navigate_attempts = 0
         while time.monotonic() < deadline:
             try:
                 cookie = self.get_cookie()
-                if previous_cookie is None or cookie != previous_cookie:
+                if previous_cookie is not None and cookie == previous_cookie:
+                    last_error = "等待 MiMo 更新登录状态"
+                elif cookie_validator is not None and not cookie_validator(cookie):
+                    last_error = "Cookie 尚未生效，请在打开的浏览器中完成登录或验证码"
+                else:
                     return cookie
             except PlaywrightSessionError as exc:
                 last_error = str(exc)
-            time.sleep(1)
+                # 卡在小米登录页时，定期回到平台页，帮助 SSO/前端再次触发回跳。
+                page_url = self._page_url()
+                if (
+                    "account.xiaomi.com" in page_url
+                    and navigate_attempts < 2
+                    and time.monotonic() + 8 < deadline
+                ):
+                    navigate_attempts += 1
+                    try:
+                        page.goto(MIMO_URL, wait_until="domcontentloaded", timeout=20_000)
+                    except Exception:
+                        pass
+            time.sleep(SSO_POLL_SECONDS)
         raise PlaywrightSessionError(
             last_error or "等待 MiMo 更新登录状态超时，请完成登录或验证码验证"
         )
@@ -214,6 +264,7 @@ def refresh_cookie(
     interactive: bool = False,
     timeout_seconds: int = 30,
     previous_cookie: str | None = None,
+    cookie_validator: Callable[[str], bool] | None = None,
 ) -> tuple[str | None, str | None]:
     """使用项目专用目录刷新 MiMo Cookie，返回 ``(Cookie, 错误)``。"""
     if timeout_seconds <= 0:
@@ -230,6 +281,7 @@ def refresh_cookie(
             interactive=interactive,
             timeout_seconds=timeout_seconds,
             previous_cookie=previous_cookie,
+            cookie_validator=cookie_validator,
         ), None
     except PlaywrightSessionError as exc:
         return None, str(exc)

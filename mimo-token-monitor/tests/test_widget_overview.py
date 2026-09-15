@@ -215,16 +215,59 @@ class TestPlaywrightRecovery(unittest.TestCase):
         w._do_fetch = Mock()
         w._playwright_worker = Mock()
 
-        with patch("widget.QMessageBox.information") as information, patch(
-            "widget.QMessageBox.warning"
-        ) as warning:
+        with patch("widget.QMessageBox") as message_box:
+            message_box.Icon.Warning = object()
+            message_box.StandardButton.Ok = object()
+            box = Mock()
+            message_box.return_value = box
             w._on_playwright_cookie_done("fresh", None, False)
-            information.assert_not_called()
-            warning.assert_not_called()
+            message_box.assert_not_called()
             self.assertEqual(w.cfg["cookie"], "fresh")
-            w._on_playwright_cookie_done(None, "refresh failed", False)
+            self.assertIn("续期成功", w._router_status)
+            # Saved cookie is now "fresh"; make the validity probe fail so we
+            # exercise the hard-failure path (expired / unusable cookie).
+            with patch.object(w, "_current_cookie_still_works", return_value=False):
+                w._on_playwright_cookie_done(None, "refresh failed", False)
 
-        warning.assert_called_once()
+        message_box.assert_called_once()
+        box.exec.assert_called_once()
+        self.assertIn("refresh failed", w._router_status)
+        self.assertIs(w._router_status_ok, False)
+        w.close()
+
+    def test_auto_renew_failure_is_soft_when_cookie_still_works(self):
+        w = _make_widget(cookie="still-valid")
+        w._do_fetch = Mock()
+        w._playwright_worker = Mock()
+
+        with patch.object(w, "_current_cookie_still_works", return_value=True), patch(
+            "widget.QMessageBox"
+        ) as message_box, patch.object(w._tray_icon, "showMessage") as show_message:
+            message_box.Icon.Warning = object()
+            message_box.StandardButton.Ok = object()
+            w._on_playwright_cookie_done(None, "未找到 xiaomimimo.com Cookie", False)
+
+        message_box.assert_not_called()
+        show_message.assert_called_once()
+        self.assertIn("仍可用", w._router_status)
+        self.assertIs(w._router_status_ok, True)
+        w.close()
+
+    def test_interactive_renew_is_blocked_while_worker_runs(self):
+        w = _make_widget(cookie="stale")
+        running_worker = Mock()
+        running_worker.isRunning.return_value = True
+        w._playwright_worker = running_worker
+
+        with patch.object(w, "_set_router_status") as set_status, patch.object(
+            w._tray_icon, "showMessage"
+        ) as show_message:
+            w._refresh_playwright_cookie(interactive=True)
+
+        set_status.assert_called_once()
+        self.assertIn("已有 Playwright 续期任务", set_status.call_args[0][0])
+        show_message.assert_called_once()
+        w._playwright_worker = None
         w.close()
 
 

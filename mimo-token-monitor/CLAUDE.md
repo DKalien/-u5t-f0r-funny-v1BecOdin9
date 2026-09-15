@@ -31,7 +31,7 @@ Python 模块采用单目录扁平结构：
 - **config.py** — 配置管理。默认存储于本地外置 SQLite `D:\python\data\mimo-token-monitor\settings.db`，可由 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖，不通过 Git 同步；首次运行会从旧的 `~/.mimo-widget/config.json` 迁移，外置库不可用时保留 JSON 回退。主要字段包括 MiMo Cookie、刷新与显示设置、WLB 配置、GPT Session Cookie 和当前显示模式；完整默认值以 `config.py::DEFAULT_CONFIG` 为准。
 - **api_client.py** — API 客户端。包含 MiMo、WLB 与 GPT 5 小时/周限额查询；WLB 从 `/v1/usage` 的 `rate_limits` 精确读取 `7d` 窗口并保留既有扁平字段，同时从同一响应附加 `daily` 的 `1d` 窗口（缺少 `1d` 只显示无数据，不影响 `7d` 成功），供总览和详情显示；当日、周窗口同时返回时，总览中的日使用百分比以日、周两者剩余量的较小值计算，原始日/周 `limit` 字段保持不变；GPT 查询依次尝试本机 Codex 登录、ChatGPT Session Cookie 和本地会话记录，并对网络、429、5xx 瞬时失败重试一次。
 - **cookie_reader.py** — 浏览器 Cookie 自动读取。优先通过 CDP 从运行中的浏览器读取明文 Cookie（绕过 v20 加密），回退到 `browser_cookie3` 读取本地数据库。设置对话框「从浏览器导入」按钮调用此模块。
-- **playwright_session.py** — 可选的独立 Playwright 持久化登录会话。定时刷新和过期恢复默认使用 headless Chromium 读取最新 Cookie；需要首次登录或验证码时由用户从菜单手动续期，不使用现有 Chrome/Edge User Data。
+- **playwright_session.py** — 可选的独立 Playwright 持久化登录会话。定时刷新和过期恢复默认使用 headless Chromium；打开平台页后轮询等待小米账号 SSO 回跳并读取 `api-platform_serviceToken` 等 Cookie（SSO 常需十余秒，禁止打开后立刻读一次就失败）。手动续期使用 headed 浏览器，可传入 `cookie_validator`，保持窗口直到 Cookie 通过 API 校验或超时。不使用现有 Chrome/Edge User Data。
 - **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）；托盘还通过后台线程显示 Codex Router 当前开关状态并提供元数据更新、启停和重启入口，以及重启悬浮窗入口。
 - **router_control.py** — Codex Router 托盘操作边界。优先从安装清单读取源码目录，可由 `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖；状态读取复用 Router 的 `status.mjs --json`，GPT/WLB 切换调用 `gpt-route.mjs official|wlb`，其余操作只串行调用路由器现有脚本，并在首个失败处停止。
 - **window_snap.py** — Win32 顶层窗口枚举、窗口标题筛选、Qt 逻辑坐标与 Win32 物理像素坐标转换，以及跨屏跨窗口边框吸附的纯几何计算。
@@ -45,7 +45,8 @@ Python 模块采用单目录扁平结构：
 - UI 全部通过 `QPainter` 自定义绘制，不使用 QSS 样式表或 Qt Designer。
 - 窗口使用 `FramelessWindowHint` + `Tool`，默认附加 `WindowStaysOnTopHint`；标题栏图钉按钮可切换置顶状态并保存到 `always_on_top`。通过 `mouseMoveEvent` 实现拖动，拖动时有屏幕边缘吸附逻辑。拖动时设置 `WA_NoSystemBackground` 防止 Windows DWM 残留阴影导致闪烁。
 - 跨窗口吸附在主屏和副屏均识别原生标题为 `ETF Tracker` 或 `MiMo Token Monitor` 的可见、非最小化窗口，阈值为 15 个 Qt 逻辑像素。`GetWindowRect()` 返回物理像素；拖动时必须按当前 `QScreen.geometry()` 原点和 `devicePixelRatio` 转换后再计算，并将最终坐标转换回 Qt 逻辑坐标。
-- API 认证依赖 Cookie。支持通过 CDP 自动导入（需 Edge 快捷方式添加调试参数，见 README）、Playwright 独立会话自动续期，或手动从 DevTools 复制。
+- API 认证依赖 Cookie（关键名为 `api-platform_serviceToken`）。支持通过 CDP 自动导入（需 Edge 快捷方式添加调试参数，见 README）、Playwright 独立会话自动续期，或手动从 DevTools 复制。
+- Playwright 续期 UI：开始/成功/失败会在悬浮窗底部状态行与托盘通知；失败状态在模态框关闭前不自动清除，关闭后再保留约 12 秒。若当前 Cookie 仍可用而仅 Playwright 会话未登录，自动续期失败只给软提示，不弹阻塞对话框；已有续期任务时手动点击会提示进行中而不是静默忽略。工作线程信号名为 `result_ready`，避免与 `QThread.finished` 冲突。
 - 平台目标为 Windows（字体 `Microsoft YaHei`，`.ico` 图标）。
 - 内置 `PLAN_TIERS` 常量（4 个挡位：Lite ¥39 / Standard ¥99 / Pro ¥329 / Max ¥659），通过 `_get_plan_tier_info()` 根据套餐总额自动匹配挡位并计算每 Credit 单价，在悬浮窗内显示已用额度折合金额。
 - 当余额为 0 时，悬浮窗自动隐藏余额显示（包括右上角金额和 tooltip 中的余额行）。

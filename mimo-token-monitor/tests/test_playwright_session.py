@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import playwright_session
 from playwright_session import PlaywrightSession, PlaywrightSessionError, refresh_cookie
@@ -11,6 +11,7 @@ class _FakePage:
     def __init__(self):
         self.goto_calls = []
         self.wait_calls = []
+        self.url = "https://platform.xiaomimimo.com/console/balance"
 
     def goto(self, *args, **kwargs):
         self.goto_calls.append((args, kwargs))
@@ -100,6 +101,45 @@ class TestPlaywrightSession(unittest.TestCase):
 
         session.close(remove_user_data_dir=True)
 
+    def test_service_token_is_sorted_first(self):
+        context = _FakeContext()
+        context.cookies_value = [
+            {"name": "userId", "value": "1", "domain": ".xiaomimimo.com"},
+            {
+                "name": "api-platform_serviceToken",
+                "value": "TOKEN",
+                "domain": ".platform.xiaomimimo.com",
+            },
+        ]
+        playwright = _FakePlaywright(context)
+        manager = Mock()
+        manager.start.return_value = playwright
+        session = PlaywrightSession(tempfile.mkdtemp())
+
+        with patch.object(playwright_session, "_load_sync_playwright", return_value=lambda: manager):
+            self.assertEqual(
+                session.get_cookie(),
+                "api-platform_serviceToken=TOKEN; userId=1",
+            )
+        session.close()
+
+    def test_missing_cookie_on_sso_page_has_clear_error(self):
+        context = _FakeContext()
+        page = _FakePage()
+        context.pages = [page]
+        context.page = page
+        page.url = "https://account.xiaomi.com/fe/service/login/password"
+        playwright = _FakePlaywright(context)
+        manager = Mock()
+        manager.start.return_value = playwright
+        session = PlaywrightSession(tempfile.mkdtemp())
+
+        with patch.object(playwright_session, "_load_sync_playwright", return_value=lambda: manager):
+            with self.assertRaisesRegex(PlaywrightSessionError, "SSO") as raised:
+                session.get_cookie()
+        self.assertIn("小米账号", str(raised.exception))
+        session.close()
+
     def test_missing_playwright_has_clear_non_sensitive_error(self):
         session = PlaywrightSession(tempfile.mkdtemp())
         with patch.object(
@@ -156,6 +196,7 @@ class TestPlaywrightSession(unittest.TestCase):
             interactive=True,
             timeout_seconds=12,
             previous_cookie=None,
+            cookie_validator=None,
         )
         session.close.assert_called_once_with()
 
@@ -200,8 +241,58 @@ class TestPlaywrightSession(unittest.TestCase):
         self.assertEqual(session.refresh_cookie(timeout_seconds=10), "session_id=ready")
 
         session.open_mimo.assert_called_once_with(timeout=10_000)
-        self.assertEqual(page.wait_calls, [3000])
+        self.assertEqual(page.wait_calls, [2000])
         self.assertEqual(playwright_session.MIMO_URL, "https://platform.xiaomimimo.com/#/console/balance")
+
+    def test_interactive_refresh_keeps_waiting_until_cookie_validator_passes(self):
+        session = PlaywrightSession(tempfile.mkdtemp())
+        session.open_mimo = Mock()
+        session.get_cookie = Mock(
+            side_effect=["tracking=1", "tracking=1", "mimo_token=ready"]
+        )
+        validator = Mock(side_effect=[False, False, True])
+        clock = iter([0, 0, 1, 1, 2, 2, 3])
+
+        with (
+            patch("playwright_session.time.sleep") as sleep,
+            patch("playwright_session.time.monotonic", side_effect=lambda: next(clock)),
+        ):
+            self.assertEqual(
+                session.refresh_cookie(
+                    interactive=True,
+                    timeout_seconds=10,
+                    cookie_validator=validator,
+                ),
+                "mimo_token=ready",
+            )
+
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(
+            validator.call_args_list,
+            [call("tracking=1"), call("tracking=1"), call("mimo_token=ready")],
+        )
+
+    def test_module_refresh_cookie_forwards_validator(self):
+        session = Mock()
+        session.refresh_cookie.return_value = "mimo_token=ready"
+        validator = Mock(return_value=True)
+        with (
+            patch.object(playwright_session, "PlaywrightSession", return_value=session),
+            patch("config.playwright_user_data_dir", return_value="C:/isolated/mimo-profile"),
+        ):
+            result = refresh_cookie(
+                interactive=True,
+                timeout_seconds=180,
+                cookie_validator=validator,
+            )
+
+        self.assertEqual(result, ("mimo_token=ready", None))
+        session.refresh_cookie.assert_called_once_with(
+            interactive=True,
+            timeout_seconds=180,
+            previous_cookie=None,
+            cookie_validator=validator,
+        )
 
 
 if __name__ == "__main__":

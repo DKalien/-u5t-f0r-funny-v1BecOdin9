@@ -205,7 +205,8 @@ class FetchWorker(QThread):
 class PlaywrightCookieWorker(QThread):
     """Refresh the persistent Playwright session away from the UI thread."""
 
-    finished = pyqtSignal(object, object, bool)
+    # Avoid clashing with QThread.finished(); deliver (cookie, error, interactive).
+    result_ready = pyqtSignal(object, object, bool)
 
     def __init__(
         self,
@@ -217,18 +218,36 @@ class PlaywrightCookieWorker(QThread):
         self.interactive = interactive
         self.previous_cookie = previous_cookie
 
+    @staticmethod
+    def _cookie_is_usable(cookie: str) -> bool:
+        result = api_client.fetch_balance(cookie)
+        return bool(result.get("ok"))
+
     def run(self):
-        cookie, error = playwright_session.refresh_cookie(
-            interactive=self.interactive,
-            timeout_seconds=180 if self.interactive else 30,
-            previous_cookie=self.previous_cookie,
-        )
-        if cookie:
-            result = api_client.fetch_balance(cookie)
-            if not result.get("ok"):
-                error = result.get("error") or "Cookie 验证失败"
-                cookie = None
-        self.finished.emit(cookie, error, self.interactive)
+        try:
+            if self.interactive:
+                # Keep the headed browser open until a usable cookie appears so the
+                # user can finish login / captcha instead of the window closing early.
+                cookie, error = playwright_session.refresh_cookie(
+                    interactive=True,
+                    timeout_seconds=180,
+                    previous_cookie=self.previous_cookie,
+                    cookie_validator=self._cookie_is_usable,
+                )
+            else:
+                cookie, error = playwright_session.refresh_cookie(
+                    interactive=False,
+                    timeout_seconds=30,
+                    previous_cookie=self.previous_cookie,
+                )
+                if cookie:
+                    result = api_client.fetch_balance(cookie)
+                    if not result.get("ok"):
+                        error = result.get("error") or "Cookie 验证失败"
+                        cookie = None
+        except Exception as exc:  # noqa: BLE001 - worker must always emit
+            cookie, error = None, f"Playwright 续期异常（{type(exc).__name__}）"
+        self.result_ready.emit(cookie, error, self.interactive)
 
 
 
@@ -1783,16 +1802,47 @@ class TokenWidget(QWidget):
         if not interactive and not self.cfg.get("playwright_auto_refresh", True):
             return
         if self._playwright_worker is not None and self._playwright_worker.isRunning():
+            if interactive:
+                message = "已有 Playwright 续期任务正在进行，请稍候"
+                self._set_router_status(message, ok=False, clear_after=4000)
+                self._tray_icon.showMessage(
+                    "Playwright 续期",
+                    message,
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    3000,
+                )
             return
 
         previous_cookie = self.cfg.get("cookie", "") if require_cookie_change else None
+        if interactive:
+            status = "正在打开登录浏览器，请在窗口中完成登录..."
+            self._set_router_status(status)
+            self._tray_icon.showMessage(
+                "Playwright 续期",
+                "已打开浏览器，请完成 MiMo 登录或验证码；窗口会保持到登录成功或超时",
+                QSystemTrayIcon.MessageIcon.Information,
+                5000,
+            )
+        else:
+            self._set_router_status("正在自动续期 Cookie...")
         self._playwright_worker = PlaywrightCookieWorker(
             interactive,
             previous_cookie,
             self,
         )
-        self._playwright_worker.finished.connect(self._on_playwright_cookie_done)
+        self._playwright_worker.result_ready.connect(self._on_playwright_cookie_done)
         self._playwright_worker.start()
+
+    def _current_cookie_still_works(self) -> bool:
+        """Best-effort check whether the saved Cookie can still call MiMo."""
+        cookie = (self.cfg.get("cookie") or "").strip()
+        if not cookie:
+            return False
+        try:
+            result = api_client.fetch_balance(cookie)
+        except Exception:
+            return False
+        return bool(result.get("ok"))
 
     def _on_playwright_cookie_done(self, cookie, error, interactive: bool):
         worker = self._playwright_worker
@@ -1805,14 +1855,62 @@ class TokenWidget(QWidget):
             self._playwright_recovery_attempted = False
             save_config(self.cfg)
             self._mimo_error = ""
+            self._set_router_status("Cookie 续期成功", ok=True, clear_after=5000)
+            self._tray_icon.showMessage(
+                "Playwright 续期",
+                "Cookie 已更新，正在刷新用量",
+                QSystemTrayIcon.MessageIcon.Information,
+                3000,
+            )
             self._do_fetch()
             return
 
-        QMessageBox.warning(
-            self,
+        message = error or "无法刷新登录状态；如需登录或验证码验证，请从菜单手动续期。"
+        first_line = message.splitlines()[0][:80]
+        cookie_ok = self._current_cookie_still_works()
+
+        # Playwright 独立会话没登录 ≠ 配置里的 Cookie 失效。
+        # 后者仍可用时，自动续期失败只给状态/托盘提示，不弹阻塞对话框。
+        if cookie_ok and not interactive:
+            status = "Playwright 未登录，当前 Cookie 仍可用"
+            self._set_router_status(status, ok=True, clear_after=10000)
+            self._tray_icon.showMessage(
+                "Playwright 续期",
+                status + "。如需自动续期，请手动执行一次「Playwright 续期」并完成登录。",
+                QSystemTrayIcon.MessageIcon.Information,
+                6000,
+            )
+            self.update()
+            return
+
+        if cookie_ok:
+            first_line = "Playwright 登录未完成，当前 Cookie 仍可用"
+            message = (
+                f"{message}\n\n"
+                "当前配置的 Cookie 仍然有效，用量可继续刷新。\n"
+                "若要启用 Playwright 自动续期，请在打开的浏览器中完成登录。"
+            )
+
+        # 先把状态画在悬浮窗上，并且在对话框关闭前不清除
+        #（否则用户看弹窗超过 clear_after 时，关掉后悬浮窗已经没字了）。
+        self._set_router_status(first_line, ok=False)
+        self._tray_icon.showMessage(
             "Playwright 续期失败",
-            error or "无法刷新登录状态；如需登录或验证码验证，请从菜单手动续期。",
+            message.splitlines()[0][:120],
+            QSystemTrayIcon.MessageIcon.Warning,
+            6000,
         )
+        box = QMessageBox(
+            QMessageBox.Icon.Warning,
+            "Playwright 续期失败",
+            message,
+            QMessageBox.StandardButton.Ok,
+            self,
+        )
+        box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        box.exec()
+        self._set_router_status(first_line, ok=False, clear_after=12000)
+        self.update()
 
     # ── Fetch ───────────────────────────────────────────────────
     def _do_fetch(self):
@@ -1908,6 +2006,8 @@ class TokenWidget(QWidget):
                 lines.append(f"GPT \u5468\u9650\u989d \u9519\u8bef: {self._gpt_error}")
         elif self._last_error:
             lines.append(f"错误: {self._last_error}")
+        if self._router_status:
+            lines.append(f"状态: {self._router_status}")
         tooltip_text = "\n".join(lines)
         self.setToolTip(tooltip_text)
         if hasattr(self, '_tray_icon'):

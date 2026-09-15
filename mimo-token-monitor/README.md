@@ -60,9 +60,16 @@ python -m playwright install chromium
 
 该配置目录位于 `MIMO_TOKEN_MONITOR_DATA_DIR` 下，不使用也不修改现有 Edge/Chrome 用户目录。
 该目录包含登录状态，请勿复制给他人或提交到 Git。
-自动续期和过期恢复均在后台运行，不会闪现浏览器窗口；如果服务端 Cookie 已硬过期，续期会失败并
-提示用户，此时可从托盘或悬浮窗菜单手动执行「Playwright 续期」，在打开的浏览器中完成登录或验证码。
-验证码仍然需要人工输入。Playwright 不能延长服务端设置的 Cookie 有效期。
+
+续期会打开平台页并等待小米账号 SSO 回跳，读取 `api-platform_serviceToken` 等
+`xiaomimimo.com` Cookie（SSO 往往需要十余秒，不能打开后立刻读取）。自动续期和过期恢复
+默认使用 headless Chromium，不会闪现浏览器窗口；手动「Playwright 续期」会打开有界面浏览器，
+并保持到 Cookie 通过 API 校验或超时，以便完成登录/验证码。
+
+若当前配置的 Cookie 仍有效、只是独立 Playwright 会话尚未写入平台 Cookie，自动续期失败只会在
+悬浮窗底部和托盘提示「Playwright 未登录，当前 Cookie 仍可用」，不会弹阻塞对话框。真正需要
+人工登录时，可从托盘或悬浮窗菜单手动执行「Playwright 续期」。验证码仍然需要人工输入。
+Playwright 不能延长服务端设置的 Cookie 有效期。
 
 **方式一：一键导入（推荐）**
 
