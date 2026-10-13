@@ -44,7 +44,6 @@ def resolve_router_root(environ: Mapping[str, str] | None = None) -> Path:
     root = root.resolve()
     required = (
         root / "codex-router.ps1",
-        root / "src" / "catalog.mjs",
         root / "src" / "config-manager.mjs",
         root / "src" / "gpt-route.mjs",
         root / "src" / "service.mjs",
@@ -57,20 +56,17 @@ def resolve_router_root(environ: Mapping[str, str] | None = None) -> Path:
 
 def _commands(operation: str, root: Path) -> list[list[str]]:
     node = "node"
-    catalog = str(root / "src" / "catalog.mjs")
     service = str(root / "src" / "service.mjs")
     gpt_route = str(root / "src" / "gpt-route.mjs")
     status = str(root / "src" / "status.mjs")
     script = str(root / "codex-router.ps1")
     if operation == "status":
         return [[node, status, "--json"]]
-    if operation in {"route-wlb", "route-official"}:
+    if operation in {"route-wlb", "route-official", "route-supergpt"}:
         return [
             [node, status, "--json"],
             [node, gpt_route, operation.removeprefix("route-")],
         ]
-    if operation == "refresh":
-        return [[node, catalog], [node, service, "restart"]]
     if operation == "restart":
         return [[node, service, "restart"]]
     if operation in {"enable", "disable"}:
@@ -138,7 +134,7 @@ def _status_result(label: str, result: subprocess.CompletedProcess) -> RouterRes
         mode == "router"
         and managed
         and health.get("ok") is True
-        and gpt_route.get("mode") in {"official", "wlb"}
+        and gpt_route.get("mode") in {"official", "wlb", "supergpt"}
         and gpt_route.get("readable") is True
         and gpt_route.get("ready") is True
     ):
@@ -192,12 +188,12 @@ def run_router_operation(
 ) -> RouterResult:
     labels = {
         "status": "检查路由状态",
-        "refresh": "更新模型元数据",
         "enable": "开启路由",
         "disable": "关闭路由",
         "restart": "重启路由器",
         "route-wlb": "切换 GPT 路由",
         "route-official": "切换 GPT 路由",
+        "route-supergpt": "切换 GPT 路由",
     }
     label = labels.get(operation, "路由操作")
     try:
@@ -226,11 +222,11 @@ def run_router_operation(
             return RouterResult(False, f"{label}失败", str(exc))
         if result.returncode != 0:
             accepts_not_ready = operation == "status" or (
-                operation in {"route-wlb", "route-official"} and index == 0
+                operation in {"route-wlb", "route-official", "route-supergpt"} and index == 0
             )
             if not (accepts_not_ready and result.returncode == 1):
                 return RouterResult(False, f"{label}失败", _failure_detail(result))
-        if operation in {"route-wlb", "route-official"} and index == 0:
+        if operation in {"route-wlb", "route-official", "route-supergpt"} and index == 0:
             failure = _route_precheck(label, result)
             if failure is not None:
                 return failure
@@ -239,16 +235,17 @@ def run_router_operation(
         return _status_result(label, result)
 
     messages = {
-        "refresh": "模型元数据已更新，路由器已重启",
         "enable": "路由已开启",
         "disable": "路由已关闭",
         "restart": "路由器已重启",
         "route-wlb": "GPT 路由已切换到 WLB",
         "route-official": "GPT 路由已切换到官方",
+        "route-supergpt": "GPT 路由已切换到 SuperGPT",
     }
     target_route = {
         "route-wlb": "wlb",
         "route-official": "official",
+        "route-supergpt": "supergpt",
     }.get(operation)
     return RouterResult(
         True,
@@ -258,6 +255,7 @@ def run_router_operation(
             "disable": False,
             "route-wlb": True,
             "route-official": True,
+            "route-supergpt": True,
         }.get(operation),
         gpt_route=target_route,
     )

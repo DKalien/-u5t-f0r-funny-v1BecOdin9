@@ -16,6 +16,7 @@ import cookie_reader
 import playwright_session
 import router_control
 import snapshot_writer
+import supergpt_balance
 import window_snap
 
 SNAP_THRESHOLD = 15  # px, 距屏幕边缘多少像素内触发吸附
@@ -281,6 +282,20 @@ class GPTFetchWorker(QThread):
         self.finished.emit(result)
 
 
+class SuperGPTBalanceWorker(QThread):
+    result_ready = pyqtSignal(dict)
+
+    def run(self):
+        if self.isInterruptionRequested():
+            return
+        try:
+            result = supergpt_balance.fetch_balance()
+        except Exception:
+            result = {"ok": False, "balance": None, "currency": None, "error": "SuperGPT 余额查询失败"}
+        if not self.isInterruptionRequested():
+            self.result_ready.emit(result)
+
+
 class RouterWorker(QThread):
     completed = pyqtSignal(object)
 
@@ -440,6 +455,10 @@ class TokenWidget(QWidget):
         # GPT weekly usage state
         self._gpt_data: dict | None = None
         self._gpt_error = ""
+        self._supergpt_balance: dict | None = None
+        self._supergpt_error = ""
+        self._supergpt_last_update = ""
+        self._supergpt_worker: SuperGPTBalanceWorker | None = None
         self._last_update = "等待更新..."
         self._router_status = ""
         self._router_status_ok: bool | None = None
@@ -581,11 +600,12 @@ class TokenWidget(QWidget):
 
     @staticmethod
     def _overview_row_metrics(index: int):
-        """Return geometry for one full-size overview row."""
+        """Align the first-row bar and balance with the dual-bar columns."""
         row_x = 16
         label_y = 38 + index * 34
         bar_y = 44 + index * 34
-        return row_x, label_y, bar_y, 228, 14
+        bar_width = (228 - DUAL_BAR_GAP) // 2 if index == 0 else 228
+        return row_x, label_y, bar_y, bar_width, 14
 
     def _build_mimo_tooltip_lines(self) -> list:
         lines = []
@@ -629,6 +649,12 @@ class TokenWidget(QWidget):
 
     def _build_overview_tooltip_lines(self) -> list:
         lines = ["总览"]
+        lines.append(f"SuperGPT 余额: {self._supergpt_balance_text()}")
+        if self._supergpt_last_update:
+            lines.append(f"SuperGPT 更新于: {self._supergpt_last_update}")
+        if self._supergpt_error:
+            stale = "（数据已过期，继续显示上次余额）" if self._supergpt_balance else ""
+            lines.append(f"SuperGPT{stale}: {self._supergpt_error}")
         has_cookie = bool(self.cfg.get("cookie", "").strip())
         mimo_pct = (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None
         lines.append(f"Token Plan: {self._format_overview_percent(mimo_pct, has_cookie)}")
@@ -698,20 +724,18 @@ class TokenWidget(QWidget):
 
         tray_menu.addSeparator()
 
-        metadata_act = QAction("更新模型元数据", self)
-        metadata_act.triggered.connect(
-            lambda _checked=False: self._start_router_operation("refresh")
-        )
-        tray_menu.addAction(metadata_act)
-
         router_menu = tray_menu.addMenu("路由控制（状态未知）")
         self._router_menu_action = router_menu.menuAction()
         self._gpt_route_actions = {}
-        for route, title in (("wlb", "切换到 WLB"), ("official", "切换到 GPT")):
+        for route, title in (
+            ("wlb", "切换到 WLB"),
+            ("supergpt", "切换到 SuperGPT"),
+            ("official", "切换到 GPT"),
+        ):
             action = router_menu.addAction(title)
             action.setCheckable(True)
-            action.setToolTip("全局切换：影响所有任务后续的 GPT 请求")
-            operation = "route-wlb" if route == "wlb" else "route-official"
+            action.setToolTip("全局切换：影响后续原生 GPT 请求；已识别 GPT 子代理固定走官方")
+            operation = f"route-{route}"
             action.triggered.connect(
                 lambda _checked=False, operation=operation: self._start_router_operation(operation)
             )
@@ -731,7 +755,7 @@ class TokenWidget(QWidget):
             lambda _checked=False: self._start_router_operation("restart")
         )
         self._router_actions = [
-            metadata_act, enable_act, disable_act, restart_act,
+            enable_act, disable_act, restart_act,
             *self._gpt_route_actions.values(),
         ]
         tray_menu.aboutToHide.connect(
@@ -767,7 +791,7 @@ class TokenWidget(QWidget):
 
     def _set_gpt_route(self, route: str | None):
         previous = self._gpt_route
-        self._gpt_route = route if route in {"official", "wlb"} else None
+        self._gpt_route = route if route in {"official", "wlb", "supergpt"} else None
         for name, action in self._gpt_route_actions.items():
             action.setChecked(name == self._gpt_route)
         if previous != self._gpt_route:
@@ -841,11 +865,11 @@ class TokenWidget(QWidget):
             return
 
         labels = {
-            "refresh": "正在更新模型元数据...",
             "enable": "正在开启路由...",
             "disable": "正在关闭路由...",
             "restart": "正在重启路由器...",
             "route-wlb": "正在切换到 WLB...",
+            "route-supergpt": "正在切换到 SuperGPT...",
             "route-official": "正在切换到 GPT...",
         }
         for action in self._router_actions:
@@ -1250,7 +1274,7 @@ class TokenWidget(QWidget):
 
         rows: list[tuple[str, bool, object]] = [
             (
-                "Token Plan",
+                "Mimo",
                 has_cookie,
                 (self._plan_used / self._plan_total * 100)
                 if has_cookie and self._plan_total > 0
@@ -1369,6 +1393,7 @@ class TokenWidget(QWidget):
 
             percent_text = self._format_overview_percent(raw_percent, configured)
             if idx == 0:
+                self._paint_supergpt_balance(p, cell_x + bar_w + DUAL_BAR_GAP, label_y, bar_y, bar_w, bar_h)
                 suffix = _format_overview_expiry(self.cfg.get("expiry_date", ""))
                 title_text = f"{name} {suffix}" if suffix else name
                 metrics = QFontMetrics(overview_font)
@@ -1409,6 +1434,52 @@ class TokenWidget(QWidget):
                 p.drawRoundedRect(cell_x, bar_y, fill_w, bar_h, fill_radius, fill_radius)
                 p.restore()
 
+    def _supergpt_balance_text(self):
+        if self._supergpt_balance is None:
+            return "--"
+        symbol = "¥" if self._supergpt_balance["currency"] == "CNY" else "$"
+        return f"{symbol}{self._supergpt_balance['balance']:.2f}"
+
+    def _paint_supergpt_balance(self, p, x, label_y, bar_y, width, height):
+        stale = bool(self._supergpt_error)
+        text = self._supergpt_balance_text()
+        title = "API余额"
+        font = QFont("Microsoft YaHei", 9)
+        while font.pointSize() > 7 and QFontMetrics(font).horizontalAdvance(title + text) + 4 > width:
+            font.setPointSize(font.pointSize() - 1)
+        metrics = QFontMetrics(font)
+        label_width = metrics.horizontalAdvance(title)
+        value_x = x + label_width + 4
+        value_width = max(0, width - label_width - 4)
+        p.setFont(font)
+        p.setPen(QPen(DIM if stale else ACCENT_GREEN if self._gpt_route == "supergpt" else TEXT_COLOR))
+        p.drawText(QRect(x, label_y - 14, label_width, 18), Qt.AlignmentFlag.AlignVCenter, title)
+        p.setPen(QPen(DIM if stale or self._supergpt_balance is None else TEXT_COLOR))
+        p.drawText(QRect(value_x, label_y - 14, value_width, 18),
+                   Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                   metrics.elidedText(text, Qt.TextElideMode.ElideRight, value_width))
+        fraction = 0.0
+        if self._supergpt_balance is not None and self._supergpt_balance["currency"] == "USD":
+            fraction = max(0.0, min(self._supergpt_balance["balance"] / 100.0, 1.0))
+        self._draw_overview_bar(p, x, bar_y, width, height, fraction,
+                                DIM if stale else _bar_color(fraction))
+
+    def _draw_overview_bar(self, p, x, y, width, height, fraction, color):
+        p.setBrush(QBrush(BAR_BG))
+        p.setPen(QPen(TEXT_COLOR))
+        p.drawRoundedRect(x, y, width, height, 4, 4)
+        if fraction <= 0:
+            return
+        fill_width = max(1, int(width * fraction))
+        fill_radius = min(4, fill_width // 2)
+        p.setBrush(QBrush(color))
+        p.save()
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(x, y, width, height), 4, 4)
+        p.setClipPath(path)
+        p.drawRoundedRect(x, y, fill_width, height, fill_radius, fill_radius)
+        p.restore()
+
     def _draw_dual_usage_bar(self, p: QPainter, x: int, y: int, width: int, height: int,
                              primary: dict | None, secondary: dict | None):
         """Draw two independent usage bars, leaving missing windows empty."""
@@ -1418,24 +1489,10 @@ class TokenWidget(QWidget):
             (x, primary),
             (x + segment_width + gap, secondary),
         ):
-            p.setBrush(QBrush(BAR_BG))
-            p.setPen(QPen(TEXT_COLOR))
-            p.drawRoundedRect(segment_x, y, segment_width, height, 4, 4)
-            if not isinstance(window, dict):
-                continue
-            percent = self._normalize_overview_percent(window.get("used_percent"))
-            if percent is None or percent <= 0:
-                continue
-            fraction = percent / 100.0
-            fill_width = max(1, int(segment_width * fraction))
-            fill_radius = min(4, fill_width // 2)
-            p.setBrush(QBrush(_bar_color(1 - fraction)))
-            p.save()
-            path = QPainterPath()
-            path.addRoundedRect(QRectF(segment_x, y, segment_width, height), 4, 4)
-            p.setClipPath(path)
-            p.drawRoundedRect(segment_x, y, fill_width, height, fill_radius, fill_radius)
-            p.restore()
+            percent = self._normalize_overview_percent(window.get("used_percent")) if isinstance(window, dict) else None
+            fraction = 0.0 if percent is None else percent / 100.0
+            self._draw_overview_bar(p, segment_x, y, segment_width, height,
+                                    fraction, _bar_color(1 - fraction))
 
     def _paint_third_party(self, p: QPainter):
         """Paint third-party usage data in the content area."""
@@ -1486,6 +1543,35 @@ class TokenWidget(QWidget):
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 reset_line,
             )
+
+    def _do_fetch_supergpt_balance(self):
+        if self._exit_requested or self.cfg.get("display_mode", MIMO_MODE) != OVERVIEW_MODE:
+            return
+        if self._supergpt_worker is not None:
+            return
+        self._supergpt_worker = SuperGPTBalanceWorker(self)
+        self._supergpt_worker.result_ready.connect(self._on_supergpt_balance_done)
+        self._supergpt_worker.finished.connect(self._finish_supergpt_worker)
+        self._supergpt_worker.start()
+
+    def _finish_supergpt_worker(self):
+        worker = self._supergpt_worker
+        self._supergpt_worker = None
+        if worker is not None:
+            worker.wait()
+            worker.deleteLater()
+
+    def _on_supergpt_balance_done(self, result: dict):
+        if self._exit_requested:
+            return
+        if result.get("ok") and result.get("balance") is not None:
+            self._supergpt_balance = result
+            self._supergpt_error = ""
+            self._supergpt_last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            self._supergpt_error = result.get("error") or "余额查询失败"
+        self._apply_overview_tooltip_if_needed()
+        self.update()
 
     def _do_fetch_third_party(self):
         """Dispatch third-party usage fetch."""
@@ -1712,6 +1798,9 @@ class TokenWidget(QWidget):
         self._timer.stop()
         self._playwright_timer.stop()
         self._router_poll_timer.stop()
+        if self._supergpt_worker is not None:
+            self._supergpt_worker.requestInterruption()
+            self._supergpt_worker.wait()
         if self._playwright_worker is not None and self._playwright_worker.isRunning():
             self._playwright_worker.wait(5000)
         if self._exit_callback is not None:
@@ -1922,6 +2011,7 @@ class TokenWidget(QWidget):
         if display_mode == OVERVIEW_MODE:
             self._do_fetch_mimo()
             self._do_fetch_third_party()
+            self._do_fetch_supergpt_balance()
         elif display_mode == THIRD_PARTY_MODE:
             self._do_fetch_third_party()
         else:

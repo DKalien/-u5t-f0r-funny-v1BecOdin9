@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) and other coding age
 
 ## 项目概述
 
-MiMo Token Monitor — MiMo Token Plan、WLB 与 GPT 5 小时/周限额用量桌面悬浮窗。Python + PyQt6 桌面应用，通过浏览器 Cookie 认证调用 `platform.xiaomimimo.com` REST API，并提供 Codex Router 日常维护入口。
+MiMo Token Monitor — MiMo Token Plan、WLB、GPT 5 小时/周限额用量与 SuperGPT 账户余额桌面悬浮窗。Python + PyQt6 桌面应用，通过浏览器 Cookie 认证调用 `platform.xiaomimimo.com` REST API，并提供 Codex Router 日常维护入口。
 
 ## 常用命令
 
@@ -32,9 +32,10 @@ Python 模块采用单目录扁平结构：
 - **api_client.py** — API 客户端。包含 MiMo、WLB 与 GPT 5 小时/周限额查询；WLB 从 `/v1/usage` 的 `rate_limits` 精确读取 `7d` 窗口并保留既有扁平字段，同时从同一响应附加 `daily` 的 `1d` 窗口（缺少 `1d` 只显示无数据，不影响 `7d` 成功），供总览和详情显示；当日、周窗口同时返回时，总览中的日使用百分比以日、周两者剩余量的较小值计算，原始日/周 `limit` 字段保持不变；GPT 查询依次尝试本机 Codex 登录、ChatGPT Session Cookie 和本地会话记录，并对网络、429、5xx 瞬时失败重试一次。
 - **cookie_reader.py** — 浏览器 Cookie 自动读取。优先通过 CDP 从运行中的浏览器读取明文 Cookie（绕过 v20 加密），回退到 `browser_cookie3` 读取本地数据库。设置对话框「从浏览器导入」按钮调用此模块。
 - **playwright_session.py** — 可选的独立 Playwright 持久化登录会话。定时刷新和过期恢复默认使用 headless Chromium；打开平台页后轮询等待小米账号 SSO 回跳并读取 `api-platform_serviceToken` 等 Cookie（SSO 常需十余秒，禁止打开后立刻读一次就失败）。手动续期使用 headed 浏览器，可传入 `cookie_validator`，保持窗口直到 Cookie 通过 API 校验或超时。不使用现有 Chrome/Edge User Data。
-- **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）；托盘还通过后台线程显示 Codex Router 当前开关状态并提供元数据更新、启停和重启入口，以及重启悬浮窗入口。
-- **router_control.py** — Codex Router 托盘操作边界。优先从安装清单读取源码目录，可由 `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖；状态读取复用 Router 的 `status.mjs --json`，GPT/WLB 切换调用 `gpt-route.mjs official|wlb`，其余操作只串行调用路由器现有脚本，并在首个失败处停止。
+- **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）；托盘还通过后台线程显示 Codex Router 当前开关状态并提供启停和重启入口，以及重启悬浮窗入口。
+- **router_control.py** — Codex Router 托盘操作边界。优先从安装清单读取源码目录，可由 `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖；状态读取复用 Router 的 `status.mjs --json`，GPT/WLB/SuperGPT 切换调用 `gpt-route.mjs official|wlb|supergpt`，其余操作只串行调用路由器现有脚本，并在首个失败处停止。
 - **window_snap.py** — Win32 顶层窗口枚举、窗口标题筛选、Qt 逻辑坐标与 Win32 物理像素坐标转换，以及跨屏跨窗口边框吸附的纯几何计算。
+- **supergpt_balance.py** — 复用 Router 的 SuperGPT API Key，只读查询 `https://console.supergpt.dev/v1/usage` 的账户 `balance` 和 `unit`；环境变量优先，持久化文件须为普通文件，拒绝符号链接。不复制密钥进设置或日志，不跟随 HTTP 重定向；查询失败返回安全错误，不把缺失余额当作 0。
 - **snapshot_writer.py** — 快照写入。为 claude-hud 生成用量快照 JSON 文件，包含余额、用量、今日用量等信息。
 - **code_sync.py** — 检查并同步代码项目 `mimo-token-monitor/`；当前运行态只由轻量启动器在启动前调用，并且只允许干净工作区快进。模块保留独立的源码推送能力，但程序退出流程不调用它。
 
@@ -49,15 +50,16 @@ Python 模块采用单目录扁平结构：
 - Playwright 续期 UI：开始/成功/失败会在悬浮窗底部状态行与托盘通知；失败状态在模态框关闭前不自动清除，关闭后再保留约 12 秒。若当前 Cookie 仍可用而仅 Playwright 会话未登录，自动续期失败只给软提示，不弹阻塞对话框；已有续期任务时手动点击会提示进行中而不是静默忽略。工作线程信号名为 `result_ready`，避免与 `QThread.finished` 冲突。
 - 平台目标为 Windows（字体 `Microsoft YaHei`，`.ico` 图标）。
 - 内置 `PLAN_TIERS` 常量（4 个挡位：Lite ¥39 / Standard ¥99 / Pro ¥329 / Max ¥659），通过 `_get_plan_tier_info()` 根据套餐总额自动匹配挡位并计算每 Credit 单价，在悬浮窗内显示已用额度折合金额。
-- 当余额为 0 时，悬浮窗自动隐藏余额显示（包括右上角金额和 tooltip 中的余额行）。
+- MiMo 余额为 0 时自动隐藏（包括右上角金额和 tooltip 余额行）；SuperGPT API余额为 0 时仍显示金额，进度条为空。
 - 系统托盘：`QSystemTrayIcon` 实现最小化到托盘，右上角绘制最小化按钮（`─`），双击托盘图标恢复窗口，托盘 tooltip 与悬浮窗同步更新；“重启悬浮窗”直接退出当前进程并在释放单实例锁后启动新进程。
-- Codex Router 维护：`router_control.py` 优先使用 `MIMO_TOKEN_MONITOR_ROUTER_ROOT`，否则按 `$CODEX_HOME`（默认 `~/.codex`）读取 `codex-router/install-manifest.json` 的 `current.sourceRoot`，并校验所需入口文件。状态调用 `node src/status.mjs --json`；GPT/WLB 切换调用 `node src/gpt-route.mjs official|wlb`（先检查 Router 已开启，不自动启停服务）；元数据更新依次运行 `node src/catalog.mjs` 和 `node src/service.mjs restart`；启停复用 `codex-router.ps1 enable|disable`；重启调用 `node src/service.mjs restart`。全部命令由 `RouterWorker` 后台串行执行，首个失败即停止，操作期间禁用路由菜单并阻止退出；托盘菜单关闭后的状态刷新延迟到事件循环下一轮，避免覆盖刚触发的操作。
+- Codex Router 维护：`router_control.py` 优先使用 `MIMO_TOKEN_MONITOR_ROUTER_ROOT`，否则按 `$CODEX_HOME`（默认 `~/.codex`）读取 `codex-router/install-manifest.json` 的 `current.sourceRoot`，并校验所需入口文件。状态调用 `node src/status.mjs --json`；GPT/WLB/SuperGPT 切换调用 `node src/gpt-route.mjs official|wlb|supergpt`（先检查 Router 已开启，不自动启停服务；已识别 GPT 子代理固定走官方）；启停复用 `codex-router.ps1 enable|disable`；重启调用 `node src/service.mjs restart`。全部命令由 `RouterWorker` 后台串行执行，首个失败即停止，操作期间禁用路由菜单并阻止退出；托盘菜单关闭后的状态刷新延迟到事件循环下一轮，避免覆盖刚触发的操作。
 - 路由操作开始时，悬浮窗底部显示进行中状态，完成后显示成功或失败摘要并在 5 秒后清除；托盘通知仍保留，用于即时反馈。
 - 单实例：使用 Windows Mutex 防止重复启动，并通过命名事件唤醒已有窗口；禁止把第二次启动保留在阻塞提示框中。
 - 进度条填充圆角动态调整：当填充宽度较小时，圆角半径限制为 `min(4, fill_w//2)`，避免超出外框圆角范围。
 - 今日用量计算：通过记录每天首次刷新时的月累计用量作为基准，后续刷新时计算差值得到今日用量。基准值持久化存储，程序重启不丢失数据。
-- 路由高亮：`RouterResult.gpt_route` 为 `official` / `wlb` 时，总览对应 GPT / WLB 整行标题使用 `ACCENT_GREEN`，WLB 单独页面标题同步变绿；状态未知时不高亮。托盘切换项只勾选已确认成功的路由。启动、菜单关闭后及每 30 秒后台刷新状态，菜单可见或操作进行中跳过；退出时停止轮询。官方直连显示 GPT，Router 已接入但不健康时不显示绿色。
-- 总览使用 9pt 单行双栏标签：Token Plan 标题显示剩余天数（无效日期不加后缀）；WLB 左侧显示 `WLB - HH:MM`（缺失时为 `WLB - --:--`），右侧只显示周重置剩余天数；GPT 左侧显示 `GPT - HH:MM`（缺失时为 `GPT - --:--`）和右对齐百分比，右侧只显示周重置剩余天数（缺失时为 `--天`）。WLB 日/周限额、GPT 5 小时/周限额均使用左右分段进度条，百分比右对齐且标签自动省略避免重叠。刷新失败时保留上次成功数据，界面与 tooltip 会标明数据已过期，并展示本机 Codex 登录、ChatGPT Cookie、本地会话三路的具体失败原因。
+- 路由高亮：`RouterResult.gpt_route` 为 `official` / `wlb` 时，总览对应 GPT / WLB 整行标题使用 `ACCENT_GREEN`，WLB 单独页面标题同步变绿；状态未知时不高亮。托盘切换项只勾选已确认成功的路由；`supergpt` 勾选 SuperGPT 菜单项并高亮余额标题，不高亮现有官方 GPT / WLB 用量栏。启动、菜单关闭后及每 30 秒后台刷新状态，菜单可见或操作进行中跳过；退出时停止轮询。官方直连显示 GPT，Router 已接入但不健康时不显示绿色。
+- SuperGPT 余额：总览第一行标题为 Mimo，进度条为 111 px，与 WLB 左侧进度条对齐，间隔 6 px 后右侧 111 px 显示 API余额标题和右对齐金额，下方进度条按余额 / 100 美元填充（范围 0 至 100%，非美元不计算进度），其余两行不变。独立 `SuperGPTBalanceWorker` 后台查询，仅总览页刷新，防止重复启动；退出时中断并等待线程。失败保留旧余额和进度并置灰，tooltip 显示独立的最后成功时间与失败原因；零余额仍显示，长金额缩小字号或省略，完整值保留在 tooltip。
+- 总览使用 9pt 单行双栏标签：Mimo 标题显示剩余天数（无效日期不加后缀）；WLB 左侧显示 `WLB - HH:MM`（缺失时为 `WLB - --:--`），右侧只显示周重置剩余天数；GPT 左侧显示 `GPT - HH:MM`（缺失时为 `GPT - --:--`）和右对齐百分比，右侧只显示周重置剩余天数（缺失时为 `--天`）。WLB 日/周限额、GPT 5 小时/周限额均使用左右分段进度条，百分比右对齐且标签自动省略避免重叠。刷新失败时保留上次成功数据，界面与 tooltip 会标明数据已过期，并展示本机 Codex 登录、ChatGPT Cookie、本地会话三路的具体失败原因。
 - 日常启动器：`launcher.py` 会被打包成轻量的 `dist/MiMo-Token-Monitor.exe`，从项目根目录或 `dist` 启动时读取项目中的 `main.py`。业务源码变更后只需重启启动器；只有修改启动器时才运行 `./build-launcher.ps1`。完整独立发行版仍使用 `MiMo-Token-Monitor.spec`，轻量构建不得覆盖该 spec。
 - 代码同步：启动器先在代码仓库干净且本地分支落后时执行 `fetch` + `merge --ff-only`，不会为了拉取而覆盖本地修改；直接运行 `main.py` 以及退出/重启流程都不会自动提交或推送源码。
 - **红线规则**：PyQt6 在 Windows 上使用浮点数坐标调用 `QPainter.drawLine()` 会导致崩溃（退出码 `0xC0000409`）；所有 `drawLine()` 坐标必须使用整数，`QRectF`/`QPointF` 等其他 Qt 几何 API 不受此约束。

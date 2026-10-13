@@ -90,14 +90,16 @@ class TestExitRuntime(unittest.TestCase):
         with managed_widget({"position": [100, 100]}) as widget:
             menu = widget._tray_icon.contextMenu()
             actions = {action.text(): action for action in menu.actions()}
-            self.assertIn("更新模型元数据", actions)
+            self.assertNotIn("更新模型元数据", actions)
+            self.assertIn("刷新", actions)
+            self.assertIn("Playwright 续期", actions)
             self.assertIn("路由控制（状态未知）", actions)
             self.assertIn("重启悬浮窗", actions)
             router_menu = actions["路由控制（状态未知）"].menu()
             self.assertIsNotNone(router_menu)
             self.assertEqual(
                 [action.text() for action in router_menu.actions() if not action.isSeparator()],
-                ["切换到 WLB", "切换到 GPT", "开启路由", "关闭路由", "重启路由器"],
+                ["切换到 WLB", "切换到 SuperGPT", "切换到 GPT", "开启路由", "关闭路由", "重启路由器"],
             )
 
     def test_route_switch_actions_and_confirmed_selection(self):
@@ -223,7 +225,7 @@ class TestExitRuntime(unittest.TestCase):
                 action.setEnabled(False)
 
             widget._on_router_operation_done(
-                RouterResult(True, "模型元数据已更新，路由器已重启")
+                RouterResult(True, "路由器已重启")
             )
 
             worker.wait.assert_called_once()

@@ -6,4 +6,4 @@
 
 | 项目 | 简介 | 技术栈 |
 |------|------|--------|
-| [MiMo Token Monitor](./mimo-token-monitor) | MiMo、WLB、GPT 用量悬浮窗，附带 Codex Router 日常维护入口 | Python + PyQt6 |
+| [MiMo Token Monitor](./mimo-token-monitor) | MiMo、WLB、GPT 用量与 SuperGPT 余额悬浮窗，附带 Codex Router 路由切换及维护入口 | Python + PyQt6 |

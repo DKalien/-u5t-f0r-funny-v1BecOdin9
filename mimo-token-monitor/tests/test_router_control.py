@@ -3,7 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from router_control import (
     ROUTER_ROOT_ENV,
@@ -16,7 +16,6 @@ def make_router_root(base: Path) -> Path:
     root = base / "codex-router"
     (root / "src").mkdir(parents=True)
     (root / "codex-router.ps1").touch()
-    (root / "src" / "catalog.mjs").touch()
     (root / "src" / "config-manager.mjs").touch()
     (root / "src" / "gpt-route.mjs").touch()
     (root / "src" / "service.mjs").touch()
@@ -25,6 +24,63 @@ def make_router_root(base: Path) -> Path:
 
 
 class TestRouterControl(unittest.TestCase):
+    def test_supergpt_status_requires_readable_ready_and_healthy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_router_root(Path(tmp))
+            for healthy, readable, ready in ((True, True, True), (False, True, True),
+                                            (True, False, True), (True, True, False)):
+                with self.subTest(healthy=healthy, readable=readable, ready=ready):
+                    payload = {
+                        "config": {"mode": "router", "managed": True},
+                        "health": {"ok": healthy},
+                        "gptRoute": {"mode": "supergpt", "readable": readable, "ready": ready},
+                    }
+                    runner = Mock(return_value=subprocess.CompletedProcess(
+                        [], 0 if healthy and readable and ready else 1,
+                        json.dumps(payload).encode(), b"",
+                    ))
+                    result = run_router_operation(
+                        "status", runner=runner, environ={ROUTER_ROOT_ENV: str(root)}
+                    )
+                    self.assertTrue(result.ok)
+                    self.assertTrue(result.route_enabled)
+                    self.assertEqual(result.gpt_route,
+                                     "supergpt" if healthy and readable and ready else None)
+
+    def test_supergpt_switch_reuses_precheck_and_reports_command_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_router_root(Path(tmp))
+            for enabled, switch_ok in ((True, True), (True, False), (False, True)):
+                with self.subTest(enabled=enabled, switch_ok=switch_ok):
+                    precheck = subprocess.CompletedProcess(
+                        [], 0 if enabled else 1,
+                        json.dumps({
+                            "config": {"mode": "router" if enabled else "native", "managed": enabled},
+                            "health": {"ok": enabled},
+                        }).encode(), b"",
+                    )
+                    runner = Mock(side_effect=[precheck, subprocess.CompletedProcess(
+                        [], 0 if switch_ok else 1, b"", "SuperGPT 密钥未配置".encode(),
+                    )])
+                    result = run_router_operation(
+                        "route-supergpt", runner=runner, environ={ROUTER_ROOT_ENV: str(root)}
+                    )
+                    self.assertEqual(result.ok, enabled and switch_ok)
+                    self.assertEqual(runner.call_args_list[0].args[0],
+                                     ["node", str(root / "src" / "status.mjs"), "--json"])
+                    if enabled:
+                        self.assertEqual(runner.call_args_list[1].args[0],
+                                         ["node", str(root / "src" / "gpt-route.mjs"), "supergpt"])
+                    self.assertEqual(runner.call_count, 2 if enabled else 1)
+                    if result.ok:
+                        self.assertEqual(result.message, "GPT 路由已切换到 SuperGPT")
+                        self.assertTrue(result.route_enabled)
+                        self.assertEqual(result.gpt_route, "supergpt")
+                    else:
+                        self.assertIsNone(result.gpt_route)
+                        self.assertIsNone(result.route_enabled)
+                        self.assertIn("密钥未配置" if enabled else "先开启路由", result.detail)
+
     def test_resolve_root_from_install_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -42,7 +98,21 @@ class TestRouterControl(unittest.TestCase):
                 root.resolve(),
             )
 
-    def test_refresh_runs_catalog_then_restart(self):
+    def test_removed_refresh_is_rejected_without_running_commands(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_router_root(Path(tmp))
+
+            def runner(*_args, **_kwargs):
+                self.fail("Removed metadata refresh must not execute commands")
+
+            result = run_router_operation(
+                "refresh", runner=runner, environ={ROUTER_ROOT_ENV: str(root)}
+            )
+
+            self.assertFalse(result.ok)
+            self.assertEqual(result.detail, "未知路由操作：refresh")
+
+    def test_restart_runs_service_without_catalog(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_router_root(Path(tmp))
             calls = []
@@ -53,7 +123,7 @@ class TestRouterControl(unittest.TestCase):
 
             with patch("router_control.hidden_subprocess_kwargs", return_value={}):
                 result = run_router_operation(
-                    "refresh",
+                    "restart",
                     runner=runner,
                     environ={ROUTER_ROOT_ENV: str(root)},
                 )
@@ -62,7 +132,6 @@ class TestRouterControl(unittest.TestCase):
             self.assertEqual(
                 [call[0][1:] for call in calls],
                 [
-                    [str(root / "src" / "catalog.mjs")],
                     [str(root / "src" / "service.mjs"), "restart"],
                 ],
             )
@@ -71,25 +140,25 @@ class TestRouterControl(unittest.TestCase):
                 all(call[1]["stdin"] == subprocess.DEVNULL for call in calls)
             )
 
-    def test_failure_stops_before_restart(self):
+    def test_restart_failure_reports_detail(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_router_root(Path(tmp))
             calls = []
 
             def runner(command, **_kwargs):
                 calls.append(command)
-                return subprocess.CompletedProcess(command, 1, b"", "目录生成失败".encode())
+                return subprocess.CompletedProcess(command, 1, b"", "服务重启失败".encode())
 
             with patch("router_control.hidden_subprocess_kwargs", return_value={}):
                 result = run_router_operation(
-                    "refresh",
+                    "restart",
                     runner=runner,
                     environ={ROUTER_ROOT_ENV: str(root)},
                 )
 
             self.assertFalse(result.ok)
             self.assertEqual(len(calls), 1)
-            self.assertEqual(result.detail, "目录生成失败")
+            self.assertEqual(result.detail, "服务重启失败")
 
     def test_route_controls_reuse_existing_entrypoints(self):
         with tempfile.TemporaryDirectory() as tmp:

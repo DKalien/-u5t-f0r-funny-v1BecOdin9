@@ -1,13 +1,13 @@
 # MiMo Token Monitor
 
-MiMo Token Plan、WLB 与 GPT 5 小时/周限额用量监控桌面悬浮窗。
+MiMo Token Plan、WLB、GPT 5 小时/周限额用量及 SuperGPT 账户余额监控桌面悬浮窗。
 
 ## 功能
 
 - 桌面悬浮窗实时显示 Token Plan 用量（已用/总额度/剩余）
 - **今日已用额度显示**：自动计算并显示当天使用量及折合金额
 - 根据套餐总额自动匹配挡位（Lite/Standard/Pro/Max），显示已用额度折合金额
-- 余额为 0 时自动隐藏余额显示
+- MiMo 余额为 0 时自动隐藏；SuperGPT 余额为 0 仍显示 $0.00
 - **一键导入 Cookie**：通过 CDP 自动从浏览器读取，无需手动复制
 - **Playwright 自动续期**：使用独立浏览器配置定时刷新登录状态，减少重复登录
 - 自动读取小米平台 API 获取真实数据
@@ -17,10 +17,10 @@ MiMo Token Plan、WLB 与 GPT 5 小时/周限额用量监控桌面悬浮窗。
 - 可拖动、半透明、置顶显示；标题栏图钉按钮可切换置顶状态，默认置顶并自动保存
 - **跨窗口边框吸附**：可与 ETF Tracker 悬浮窗相互吸附，主屏和副屏均支持，并兼容不同 DPI 的显示器
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip，并可直接重启悬浮窗
-- **Codex Router 维护**：从托盘查看当前路由开关状态、更新模型元数据，并开启、关闭或重启路由器
+- **Codex Router 维护**：从托盘查看当前状态、切换官方 / WLB / SuperGPT 路由，并开启、关闭或重启路由器
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 https://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态；接口返回 `reset_at` 时同时显示 7 日窗口重置日期
-- **用量总览页面**：标题栏切换到“总览”后，以 9pt 单行文字显示 Token Plan 剩余天数、WLB 左侧日窗口重置时分/右侧周重置剩余天数，以及 GPT 左侧主窗口重置时分/右侧周重置剩余天数；各栏百分比右对齐并配左右分段进度条
+- **用量总览页面**：第一行左侧为 Mimo 套餐用量及剩余天数，右侧为 API余额（SuperGPT 账户余额），金额右对齐、进度条以 100 美元为满额。下方 WLB 日/周限额与 GPT 主/周窗口分别显示重置时分或剩余天数、右对齐百分比和左右分段进度条
 - **Claude HUD 集成**：生成快照文件供 claude-hud 读取显示
 - **本地设置数据库**：配置保存在外置 SQLite 文件中，不通过 Git 或网络同步
 
@@ -97,6 +97,15 @@ Playwright 不能延长服务端设置的 Cookie 有效期。
 - 切换后悬浮窗显示剩余百分比、已用百分比、7 天窗口和状态；当日、周窗口同时返回时，总览中的日使用百分比以日、周两者剩余量的较小值计算，原始日/周 `limit` 字段保持不变；接口返回 `reset_at` 或 `reset_after` 时显示重置日期时间，总览中的 WLB 左侧显示日窗口重置时分（如 `WLB - 18:18`，缺失时为 `WLB - --:--`），右侧只显示周重置剩余天数（如 `5天`，缺失时为 `--天`）
 - 未配置 API Key 时切换会显示提示，不会发送空请求
 
+### 总览与 SuperGPT 余额
+
+总览标题为 **Mimo**，进度条与下方 WLB 左侧进度条等宽（111 px，扣除栏间距后均分）；右侧标题为 **API余额**，金额右对齐，下方进度条以 **100 美元**为满额基准（余额越多，填充越长；超过 100 美元显示满条，金额仍显示实际值）。
+余额沿用刷新间隔在独立后台线程查询，无需复制密钥到设置：优先读取 `SUPERGPT_API_KEY`，
+否则复用 Router 状态目录中的 `supergpt-api-key.secret`（支持 Router 的状态目录环境变量）。
+查询使用 `https://console.supergpt.dev/v1/usage` 的 `balance` 和 `unit`，不把密钥额度当作充值余额。
+美元显示 `$`、人民币显示 `¥`（非美元不计算美元基准进度）；缺少数据时显示 `--`，零余额仍显示，进度条为空。失败时保留上次余额和进度并变灰，
+悬停可查看完整金额、最后成功时间和错误原因。切换到 SuperGPT 路由后，余额标题会变绿。
+
 ### GPT 5 小时与周限额
 
 总览会优先使用本机 Codex 登录信息查询 GPT 5 小时与周限额，也可在设置中填写 ChatGPT Session Cookie 作为备用认证；本地 Codex 会话记录是最后兜底。GPT 行使用一条左右分段的进度条，左侧显示 `GPT - HH:MM` 主窗口重置时分，右侧只显示周重置剩余天数；缺失重置数据时分别显示 `GPT - --:--` 与 `--天`。网络、限流或服务端瞬时失败会自动重试一次；刷新仍失败时继续显示上次成功数据，并在 tooltip 中标明具体失败来源。
@@ -121,16 +130,16 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - **拖动**：左键拖动窗口位置（除最小化按钮区域外）
 - **窗口吸附**：将 ETF Tracker 与 MiMo Token Monitor 的边框拖到约 15 个像素以内，会自动对齐左右/上下边框；两个窗口必须同时可见且未最小化，主屏和副屏均有效
 - **置顶按钮**：点击标题栏图钉图标切换置顶/取消置顶；图标高亮表示当前处于置顶状态，取消置顶时显示斜杠
-- **标题栏循环图标**：点击标题旁的图标，在 MiMo Token / WLB / 总览之间循环切换；总览会同时展示 Token Plan、WLB 日/周限额和 GPT 双窗口进度
+- **标题栏循环图标**：点击标题旁的图标，在 MiMo Token / WLB / 总览之间循环切换；总览会同时展示 Mimo 套餐用量、SuperGPT API余额、WLB 日/周限额和 GPT 双窗口进度
 - **双击悬浮窗**：立即刷新数据
 - **右键悬浮窗**：刷新 / 从浏览器导入 / 设置 / 查看原始数据 / 退出
 - **悬停悬浮窗**：显示详细 tooltip
 - **最小化按钮**：右上角 `─` 按钮，点击最小化到系统托盘
 - **系统托盘**：
   - 双击托盘图标：恢复显示悬浮窗
-  - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / 更新模型元数据 /
+  - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / Playwright 续期 /
     路由控制 / 重启悬浮窗 / 退出
-  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；可切换到 WLB / GPT，也可开启、关闭或重启 Codex Router
+  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；可切换到 WLB / SuperGPT / GPT，也可开启、关闭或重启 Codex Router
   - 重启悬浮窗：退出当前进程并释放单实例锁后启动新实例
   - 悬停托盘图标：显示用量概览
 
@@ -138,12 +147,12 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 
 - 需要先安装 Codex Router；程序默认从
   `~/.codex/codex-router/install-manifest.json` 读取当前源码目录。
-- “更新模型元数据”依次运行 `node src/catalog.mjs` 和
-  `node src/service.mjs restart`，更新失败时不会继续重启；此操作供旧手工目录维护，官方目录无需执行。
-- “切换到 WLB”和“切换到 GPT”调用 Router 的 `gpt-route.mjs wlb|official`，
-  不重启服务、不自动开启 Router。请先开启路由；切换影响所有任务后续的 GPT 请求。
+- “切换到 WLB”“切换到 SuperGPT”和“切换到 GPT”调用 Router 的
+  `gpt-route.mjs wlb|supergpt|official`，不重启服务、不自动开启 Router。请先开启路由；
+  切换影响所有任务后续的原生 GPT 请求，已识别的 GPT 子代理固定走官方。
   菜单勾选已确认的当前服务商，总览对应的 WLB / GPT 整行标题文字显示绿色；WLB
-  单独页面的标题也同步变绿。官方直连时标记 GPT；状态未知或 Router 不健康时不高亮。
+  单独页面的标题也同步变绿。SuperGPT 勾选菜单项并高亮余额标题，不高亮现有的官方 GPT / WLB
+  用量栏。官方直连时标记 GPT；状态未知或 Router 不健康时不高亮。
 - “开启路由”和“关闭路由”复用路由器的 `codex-router.ps1 enable|disable`，因此会
   同步调整 Codex 配置和后台服务；“重启路由器”只重启现有服务。
 - 程序启动后、关闭托盘菜单时及每 30 秒，会在后台调用 `node src/status.mjs --json`，
@@ -157,7 +166,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - 路由源码根目录优先取 `MIMO_TOKEN_MONITOR_ROUTER_ROOT`；未设置时读取 `$CODEX_HOME`
   （默认 `~/.codex`）下 `codex-router/install-manifest.json` 的
   `current.sourceRoot`，并校验所需入口文件。状态使用 `node src/status.mjs --json`，
-  更新元数据使用 `node src/catalog.mjs` 后重启服务，启停使用
+  启停使用
   `codex-router.ps1 enable|disable`，重启使用 `node src/service.mjs restart`。
 
 ### 多屏吸附说明
@@ -223,6 +232,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 ## 隐私
 
 - 配置与快照文件仅在本地存储。未配置 WLB API Key 时不会请求 WLB 服务
-- Cookie、API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
+- MiMo / ChatGPT Cookie 和 WLB API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 WLB 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
+- SuperGPT 密钥仅从环境变量或 Router 的受保护 `supergpt-api-key.secret` 读取，不复制进 SQLite、快照或日志；总览页向 `https://console.supergpt.dev/v1/usage` 发送带 Bearer API Key 的余额请求，不跟随重定向，未配置密钥时不请求
 - GPT 5 小时/周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源

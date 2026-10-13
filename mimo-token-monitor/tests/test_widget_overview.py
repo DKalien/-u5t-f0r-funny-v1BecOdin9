@@ -46,7 +46,7 @@ from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT, DUAL_BAR_GAP,
-    BG_COLOR, TEXT_COLOR, ACCENT_GREEN, _format_overview_expiry,
+    BG_COLOR, TEXT_COLOR, ACCENT_GREEN, DIM, SuperGPTBalanceWorker, _format_overview_expiry,
     _parse_reset_datetime, _format_overview_reset_time, _format_overview_reset_days,
 )
 from router_control import RouterResult  # noqa: E402
@@ -71,6 +71,7 @@ def _make_widget(**overrides):
     w._do_fetch_mimo = lambda: None
     w._do_fetch_third_party = lambda: None
     w._do_fetch_gpt = lambda: None
+    w._do_fetch_supergpt_balance = lambda: None
     return w
 
 
@@ -315,6 +316,138 @@ class TestOverviewPercentFormat(unittest.TestCase):
         self.assertEqual(TokenWidget._format_overview_percent(-10.0, True), "0.0%")
 
 
+class TestSuperGPTBalance(unittest.TestCase):
+    def test_first_row_aligns_with_dual_bar_columns_without_overlap(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake")
+        try:
+            self.assertEqual(TokenWidget._overview_row_metrics(0)[3], 111)
+            for amount, currency in ((0, "USD"), (0, "CNY"), (123456789.12, "USD")):
+                w._on_supergpt_balance_done(
+                    {"ok": True, "balance": amount, "currency": currency, "error": None}
+                )
+                painter = _OverviewPainter()
+                with patch.object(painter, "drawRoundedRect") as draw_bar:
+                    w._paint_overview(painter)
+                mimo_bar = next(call.args for call in draw_bar.call_args_list if call.args[0] == 16 and call.args[1] == 44)
+                wlb_bar = next(call.args for call in draw_bar.call_args_list if call.args[1] == 78)
+                self.assertEqual((mimo_bar[0], mimo_bar[2]), (wlb_bar[0], wlb_bar[2]))
+                title = next(row for row in painter.text_records if row[1] == "API余额")
+                value = next(row for row in painter.text_records if row[0] and row[0].x() > 133 and row[0].y() == 24)
+                self.assertEqual((title[0].x(), title[0].y()), (133, 24))
+                self.assertEqual(title[0].y(), value[0].y())
+                self.assertLess(title[0].right(), value[0].x())
+                self.assertEqual(value[0].right(), 243)
+                self.assertTrue(value[4] & Qt.AlignmentFlag.AlignRight)
+                balance_bar = next(call.args for call in draw_bar.call_args_list if call.args[0] == 133 and call.args[1] == 44)
+                self.assertEqual(balance_bar[:4], (133, 44, 111, 14))
+                self.assertLessEqual(QFontMetrics(value[3]).horizontalAdvance(value[1]), value[0].width())
+                first_labels = [row for row in painter.text_records if row[0] and row[0].y() == 24 and row[0].x() == 16]
+                self.assertTrue(all(row[0].right() <= 126 for row in first_labels))
+                self.assertIn(w._supergpt_balance_text(), w.toolTip())
+                if amount == 0:
+                    self.assertEqual(value[1], "$0.00" if currency == "USD" else "¥0.00")
+        finally:
+            w.close()
+
+    def test_balance_bar_uses_100_usd_and_keeps_stale_values_gray(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            for amount, currency, fill in (
+                (None, "USD", 0), (0, "USD", 0), (-5, "USD", 0),
+                (25, "USD", 27), (100, "USD", 111), (150, "USD", 111),
+                (100, "CNY", 0),
+            ):
+                with self.subTest(amount=amount, currency=currency):
+                    w._supergpt_balance = None if amount is None else {"balance": amount, "currency": currency}
+                    painter = _OverviewPainter()
+                    with patch.object(painter, "drawRoundedRect") as draw_bar:
+                        w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
+                    self.assertEqual(draw_bar.call_args_list[0].args[:4], (133, 44, 111, 14))
+                    self.assertEqual(draw_bar.call_count, 2 if fill else 1)
+                    if fill:
+                        self.assertEqual(draw_bar.call_args_list[-1].args[:4], (133, 44, fill, 14))
+            w._supergpt_balance = {"balance": 25, "currency": "USD"}
+            w._supergpt_error = "请求超时"
+            painter = _OverviewPainter()
+            with patch.object(painter, "setBrush") as brush, patch.object(painter, "drawRoundedRect") as draw_bar:
+                w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
+            self.assertEqual(draw_bar.call_args_list[-1].args[2], 27)
+            self.assertEqual(brush.call_args.args[0].color(), DIM)
+        finally:
+            w.close()
+
+    def test_failed_refresh_keeps_balance_and_marks_it_stale(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            self.assertEqual(w._supergpt_balance_text(), "--")
+            data = {"ok": True, "balance": 12.34, "currency": "USD", "error": None}
+            w._on_supergpt_balance_done(data)
+            last_update = w._supergpt_last_update
+            self.assertTrue(last_update)
+            self.assertIn(last_update, w.toolTip())
+            w._set_gpt_route("supergpt")
+            painter = _OverviewPainter()
+            w._paint_overview(painter)
+            self.assertEqual(next(row[2] for row in painter.text_records if row[1] == "API余额"), ACCENT_GREEN)
+            w._on_supergpt_balance_done({"ok": False, "balance": None, "error": "请求超时"})
+            self.assertIs(w._supergpt_balance, data)
+            self.assertEqual(w._supergpt_last_update, last_update)
+            self.assertIn("数据已过期", w.toolTip())
+            self.assertIn("请求超时", w.toolTip())
+            painter = _OverviewPainter()
+            w._paint_overview(painter)
+            self.assertTrue(all(row[2] == DIM for row in painter.text_records if row[1] in ("API余额", "$12.34")))
+            w._on_supergpt_balance_done(data)
+            self.assertEqual(w._supergpt_error, "")
+        finally:
+            w.close()
+
+    def test_only_overview_dispatches_balance_and_never_duplicates_worker(self):
+        w = _make_widget()
+        try:
+            balance = Mock()
+            w._do_fetch_supergpt_balance = balance
+            for mode in (MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE):
+                w.cfg["display_mode"] = mode
+                balance.reset_mock()
+                w._do_fetch()
+                self.assertEqual(balance.call_count, int(mode == OVERVIEW_MODE))
+            worker = Mock()
+            with patch("widget.SuperGPTBalanceWorker", return_value=worker) as factory:
+                TokenWidget._do_fetch_supergpt_balance(w)
+                TokenWidget._do_fetch_supergpt_balance(w)
+            factory.assert_called_once_with(w)
+            worker.start.assert_called_once()
+            w._exit_requested = True
+            TokenWidget._do_fetch_supergpt_balance(w)
+            worker.start.assert_called_once()
+        finally:
+            w._supergpt_worker = None
+            w.close()
+
+    def test_worker_isolated_failure_and_interruption_and_quit_waits(self):
+        worker = SuperGPTBalanceWorker()
+        results = []
+        worker.result_ready.connect(results.append)
+        with patch("widget.supergpt_balance.fetch_balance", side_effect=RuntimeError("离线")):
+            worker.run()
+        self.assertEqual(results[0]["error"], "SuperGPT 余额查询失败")
+        with patch.object(worker, "isInterruptionRequested", return_value=True), patch("widget.supergpt_balance.fetch_balance") as fetch:
+            worker.run()
+        fetch.assert_not_called()
+        w = _make_widget()
+        try:
+            w._exit_callback = Mock()
+            w._supergpt_worker = Mock()
+            w._quit_app()
+            w._supergpt_worker.requestInterruption.assert_called_once()
+            w._supergpt_worker.wait.assert_called_once()
+            w._exit_callback.assert_called_once()
+        finally:
+            w._supergpt_worker = None
+            w.close()
+
+
 class TestOverviewRowMetrics(unittest.TestCase):
     """Overview rows stack vertically and fit inside the compact window."""
 
@@ -327,10 +460,10 @@ class TestOverviewRowMetrics(unittest.TestCase):
             self.assertLessEqual(previous_bar_bottom, current_label_top)
         self.assertLessEqual(rows[-1][2] + rows[-1][4] + 10, BASE_HEIGHT)
 
-    def test_bars_match_token_plan_size(self):
+    def test_bars_match_overview_column_sizes(self):
         for index in range(3):
             _, _, _, bar_width, bar_height = TokenWidget._overview_row_metrics(index)
-            self.assertEqual((bar_width, bar_height), (228, 14))
+            self.assertEqual((bar_width, bar_height), (111 if index == 0 else 228, 14))
 
 
 class TestOverviewExpiryRendering(unittest.TestCase):
@@ -354,7 +487,7 @@ class TestOverviewExpiryRendering(unittest.TestCase):
 
     @staticmethod
     def _first_row_records(painter):
-        return [record for record in painter.text_records if record[0] and record[0].y() == 24]
+        return [record for record in painter.text_records if record[0] and record[0].y() == 24 and record[0].x() == 16]
 
     def test_first_row_combines_title_and_short_expiry(self):
         w, expiry_date, painter = self._render_first_row()
@@ -365,7 +498,7 @@ class TestOverviewExpiryRendering(unittest.TestCase):
         self.assertEqual(expiry_text, "2天")
         self.assertEqual(
             "".join(record[1] for record in title_records),
-            f"Token Plan {expiry_text}",
+            f"Mimo {expiry_text}",
         )
         self.assertEqual(title_records[0][2], TEXT_COLOR)
         w.close()
@@ -500,7 +633,7 @@ class TestWlbResetRendering(unittest.TestCase):
     def test_active_provider_header_is_green_and_other_headers_stay_white(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         try:
-            for route in ("wlb", "official", None):
+            for route in ("wlb", "official", "supergpt", None):
                 with self.subTest(route=route):
                     w._set_gpt_route(route)
                     painter = _OverviewPainter()
@@ -510,7 +643,7 @@ class TestWlbResetRendering(unittest.TestCase):
                         self.assertTrue(records)
                         expected = ACCENT_GREEN if route == provider else TEXT_COLOR
                         self.assertTrue(all(r[2] == expected for r in records))
-                    token_title = next(r for r in painter.text_records if r[1].startswith("Token Plan"))
+                    token_title = next(r for r in painter.text_records if r[1].startswith("Mimo"))
                     self.assertEqual(token_title[2], TEXT_COLOR)
         finally:
             w.close()
@@ -838,12 +971,45 @@ class TestOverviewRenderSmoke(unittest.TestCase):
 
 
 class TestRouterStatusDisplay(unittest.TestCase):
+    def test_supergpt_menu_triggers_route_and_only_checks_confirmed_status(self):
+        w = _make_widget()
+        try:
+            self.assertEqual(w._gpt_route_actions["supergpt"].text(), "切换到 SuperGPT")
+            w._set_gpt_route("official")
+            with patch.object(w, "_start_router_operation") as start:
+                w._gpt_route_actions["supergpt"].trigger()
+            start.assert_called_once_with("route-supergpt")
+            w._set_gpt_route("official")
+            self.assertFalse(w._gpt_route_actions["supergpt"].isChecked())
+            w._tray_icon.showMessage = Mock()
+            w._on_router_operation_done(
+                RouterResult(True, "GPT 路由已切换到 SuperGPT", route_enabled=True,
+                             gpt_route="supergpt")
+            )
+            self.assertEqual(w._router_status, "GPT 路由已切换到 SuperGPT")
+            self.assertEqual(w._gpt_route, "supergpt")
+            self.assertEqual(
+                [route for route, action in w._gpt_route_actions.items() if action.isChecked()],
+                ["supergpt"],
+            )
+            w._on_router_status_done(
+                RouterResult(True, "路由已开启", route_enabled=True, gpt_route="supergpt")
+            )
+            self.assertTrue(w._gpt_route_actions["supergpt"].isChecked())
+            w._on_router_operation_done(RouterResult(False, "切换 GPT 路由失败"))
+            self.assertIsNone(w._gpt_route)
+            self.assertFalse(any(action.isChecked() for action in w._gpt_route_actions.values()))
+        finally:
+            w.close()
+
     def test_router_operation_start_status_labels(self):
         expected = {
-            "refresh": "正在更新模型元数据",
             "enable": "正在开启路由",
             "disable": "正在关闭路由",
             "restart": "正在重启路由器",
+            "route-wlb": "正在切换到 WLB",
+            "route-official": "正在切换到 GPT",
+            "route-supergpt": "正在切换到 SuperGPT",
         }
         for operation, label in expected.items():
             with self.subTest(operation=operation):
