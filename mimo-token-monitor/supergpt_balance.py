@@ -7,7 +7,7 @@ import stat
 
 import requests
 
-USAGE_URL = "https://console.supergpt.dev/v1/usage"
+USAGE_URL = "https://api.supergpt.dev/v1/usage"
 
 
 def _api_key() -> str:

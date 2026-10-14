@@ -49,7 +49,7 @@ class TestSuperGPTBalance(unittest.TestCase):
                 with patch("supergpt_balance._api_key", return_value="test-secret"), \
                      patch("supergpt_balance.requests.get", return_value=response) as get:
                     self.assertEqual(supergpt_balance.fetch_balance(), {"ok": True, "balance": float(amount), "currency": "USD", "error": None})
-                    get.assert_called_once_with(supergpt_balance.USAGE_URL, headers={"Authorization": "Bearer test-secret"}, timeout=(3, 10), allow_redirects=False)
+                    get.assert_called_once_with("https://api.supergpt.dev/v1/usage", headers={"Authorization": "Bearer test-secret"}, timeout=(3, 10), allow_redirects=False)
                     response.close.assert_called_once()
 
     def test_invalid_response_never_becomes_zero_or_exposes_body(self):

@@ -102,7 +102,7 @@ Playwright 不能延长服务端设置的 Cookie 有效期。
 总览标题为 **Mimo**，进度条与下方 WLB 左侧进度条等宽（111 px，扣除栏间距后均分）；右侧标题为 **API余额**，金额右对齐，下方进度条以 **100 美元**为满额基准（余额越多，填充越长；超过 100 美元显示满条，金额仍显示实际值）。
 余额沿用刷新间隔在独立后台线程查询，无需复制密钥到设置：优先读取 `SUPERGPT_API_KEY`，
 否则复用 Router 状态目录中的 `supergpt-api-key.secret`（支持 Router 的状态目录环境变量）。
-查询使用 `https://console.supergpt.dev/v1/usage` 的 `balance` 和 `unit`，不把密钥额度当作充值余额。
+查询使用 `https://api.supergpt.dev/v1/usage` 的 `balance` 和 `unit`，不把密钥额度当作充值余额。
 美元显示 `$`、人民币显示 `¥`（非美元不计算美元基准进度）；缺少数据时显示 `--`，零余额仍显示，进度条为空。失败时保留上次余额和进度并变灰，
 悬停可查看完整金额、最后成功时间和错误原因。切换到 SuperGPT 路由后，余额标题会变绿。
 
@@ -234,5 +234,5 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - 配置与快照文件仅在本地存储。未配置 WLB API Key 时不会请求 WLB 服务
 - MiMo / ChatGPT Cookie 和 WLB API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 WLB 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
-- SuperGPT 密钥仅从环境变量或 Router 的受保护 `supergpt-api-key.secret` 读取，不复制进 SQLite、快照或日志；总览页向 `https://console.supergpt.dev/v1/usage` 发送带 Bearer API Key 的余额请求，不跟随重定向，未配置密钥时不请求
+- SuperGPT 密钥仅从环境变量或 Router 的受保护 `supergpt-api-key.secret` 读取，不复制进 SQLite、快照或日志；总览页向 `https://api.supergpt.dev/v1/usage` 发送带 Bearer API Key 的余额请求，不跟随重定向，未配置密钥时不请求
 - GPT 5 小时/周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源

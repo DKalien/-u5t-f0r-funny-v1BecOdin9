@@ -35,7 +35,7 @@ Python 模块采用单目录扁平结构：
 - **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）；托盘还通过后台线程显示 Codex Router 当前开关状态并提供启停和重启入口，以及重启悬浮窗入口。
 - **router_control.py** — Codex Router 托盘操作边界。优先从安装清单读取源码目录，可由 `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖；状态读取复用 Router 的 `status.mjs --json`，GPT/WLB/SuperGPT 切换调用 `gpt-route.mjs official|wlb|supergpt`，其余操作只串行调用路由器现有脚本，并在首个失败处停止。
 - **window_snap.py** — Win32 顶层窗口枚举、窗口标题筛选、Qt 逻辑坐标与 Win32 物理像素坐标转换，以及跨屏跨窗口边框吸附的纯几何计算。
-- **supergpt_balance.py** — 复用 Router 的 SuperGPT API Key，只读查询 `https://console.supergpt.dev/v1/usage` 的账户 `balance` 和 `unit`；环境变量优先，持久化文件须为普通文件，拒绝符号链接。不复制密钥进设置或日志，不跟随 HTTP 重定向；查询失败返回安全错误，不把缺失余额当作 0。
+- **supergpt_balance.py** — 复用 Router 的 SuperGPT API Key，只读查询 `https://api.supergpt.dev/v1/usage` 的账户 `balance` 和 `unit`；环境变量优先，持久化文件须为普通文件，拒绝符号链接。不复制密钥进设置或日志，不跟随 HTTP 重定向；查询失败返回安全错误，不把缺失余额当作 0。
 - **snapshot_writer.py** — 快照写入。为 claude-hud 生成用量快照 JSON 文件，包含余额、用量、今日用量等信息。
 - **code_sync.py** — 检查并同步代码项目 `mimo-token-monitor/`；当前运行态只由轻量启动器在启动前调用，并且只允许干净工作区快进。模块保留独立的源码推送能力，但程序退出流程不调用它。
 
