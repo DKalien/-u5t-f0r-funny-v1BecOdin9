@@ -38,6 +38,9 @@ ACCENT_YELLOW = QColor(255, 193, 7)
 ACCENT_RED = QColor(244, 67, 54)
 BAR_BG = QColor(60, 60, 60)
 DIM = QColor(150, 150, 150)
+BALANCE_LAYER_COLORS = (
+    ACCENT_GREEN, QColor(100, 181, 246), QColor(206, 147, 216), QColor(77, 208, 225),
+)
 
 
 def _bar_color(pct: float) -> QColor:
@@ -650,6 +653,12 @@ class TokenWidget(QWidget):
     def _build_overview_tooltip_lines(self) -> list:
         lines = ["总览"]
         lines.append(f"SuperGPT 余额: {self._supergpt_balance_text()}")
+        if self._supergpt_balance is not None:
+            layers, fraction = self._supergpt_balance_layers()
+            lines.append(
+                f"SuperGPT 血条: 每层 100 {self._supergpt_balance['currency']}，"
+                f"{layers} 层，当前层 {fraction * 100:.2f}%"
+            )
         if self._supergpt_last_update:
             lines.append(f"SuperGPT 更新于: {self._supergpt_last_update}")
         if self._supergpt_error:
@@ -1443,6 +1452,16 @@ class TokenWidget(QWidget):
         symbol = "¥" if self._supergpt_balance["currency"] == "CNY" else "$"
         return f"{symbol}{self._supergpt_balance['balance']:.2f}"
 
+    def _supergpt_balance_layers(self):
+        """每 100 原币种为一层；整百余额停留在当前满层。"""
+        if self._supergpt_balance is None:
+            return 0, 0.0
+        balance = self._supergpt_balance["balance"]
+        if not math.isfinite(balance) or balance <= 0:
+            return 0, 0.0
+        complete, remainder = divmod(balance, 100)
+        return int(complete) + int(remainder > 0), remainder / 100 if remainder else 1.0
+
     def _paint_supergpt_balance(self, p, x, label_y, bar_y, width, height):
         text = self._supergpt_balance_text()
         title = "API余额"
@@ -1460,13 +1479,23 @@ class TokenWidget(QWidget):
         p.drawText(QRect(value_x, label_y - 14, value_width, 18),
                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                    metrics.elidedText(text, Qt.TextElideMode.ElideRight, value_width))
-        fraction = 0.0
-        if self._supergpt_balance is not None and self._supergpt_balance["currency"] == "USD":
-            fraction = max(0.0, min(self._supergpt_balance["balance"] / 100.0, 1.0))
-        self._draw_overview_bar(p, x, bar_y, width, height, fraction, _bar_color(fraction))
+        layers, fraction = self._supergpt_balance_layers()
+        background = BAR_BG if layers <= 1 else BALANCE_LAYER_COLORS[(layers - 2) % len(BALANCE_LAYER_COLORS)]
+        color = _bar_color(fraction) if layers <= 1 else BALANCE_LAYER_COLORS[(layers - 1) % len(BALANCE_LAYER_COLORS)]
+        self._draw_overview_bar(p, x, bar_y, width, height, fraction, color, background)
+        if layers > 1:
+            p.save()
+            marker_font = QFont("Microsoft YaHei", 7, QFont.Weight.Bold)
+            p.setFont(marker_font)
+            p.setPen(QPen(QColor(20, 20, 20)))
+            marker_rect = QRect(x + 3, bar_y, max(0, width - 6), height)
+            p.drawText(marker_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                       QFontMetrics(marker_font).elidedText(
+                           f"×{layers}", Qt.TextElideMode.ElideRight, marker_rect.width()))
+            p.restore()
 
-    def _draw_overview_bar(self, p, x, y, width, height, fraction, color):
-        p.setBrush(QBrush(BAR_BG))
+    def _draw_overview_bar(self, p, x, y, width, height, fraction, color, background=BAR_BG):
+        p.setBrush(QBrush(background))
         p.setPen(QPen(TEXT_COLOR))
         p.drawRoundedRect(x, y, width, height, 4, 4)
         if fraction <= 0:

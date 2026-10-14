@@ -36,17 +36,23 @@ def tearDownModule():
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QRect, Qt  # noqa: E402
-from PyQt6.QtGui import QFont, QFontMetrics  # noqa: E402
+from PyQt6.QtGui import QFont, QFontMetrics, QFontDatabase  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 # Ensure QApplication exists
 _app = QApplication.instance() or QApplication(sys.argv)
+if sys.platform == "win32":
+    # 离屏平台需显式加载字体，才能验证 Windows 实际文本宽度。
+    for font_name in ("msyh.ttc", "msyhbd.ttc"):
+        font_path = pathlib.Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / font_name
+        if font_path.is_file():
+            QFontDatabase.addApplicationFont(str(font_path))
 
 from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT, DUAL_BAR_GAP,
-    BG_COLOR, BAR_BG, TEXT_COLOR, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, DIM, SuperGPTBalanceWorker, _format_overview_expiry,
+    BG_COLOR, BAR_BG, BALANCE_LAYER_COLORS, TEXT_COLOR, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, DIM, SuperGPTBalanceWorker, _format_overview_expiry,
     _parse_reset_datetime, _format_overview_reset_time, _format_overview_reset_days,
 )
 from router_control import RouterResult  # noqa: E402
@@ -83,6 +89,8 @@ class _OverviewPainter:
         self._font = QFont()
         self.text_records = []
         self.bar_records = []
+        self._brush = None
+        self._states = []
 
     def setPen(self, pen):
         self._pen = pen
@@ -104,10 +112,10 @@ class _OverviewPainter:
         self.bar_records.append((args[:4], self._brush.color()))
 
     def save(self):
-        pass
+        self._states.append((self._pen, QFont(self._font), self._brush))
 
     def restore(self):
-        pass
+        self._pen, self._font, self._brush = self._states.pop()
 
     def setClipPath(self, _path):
         pass
@@ -439,29 +447,113 @@ class TestSuperGPTBalance(unittest.TestCase):
         finally:
             w.close()
 
-    def test_balance_bar_uses_100_usd_and_keeps_stale_colors(self):
+    def test_balance_bar_uses_100_original_currency_and_keeps_stale_colors(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         try:
             for amount, currency, fill, color in (
                 (None, "USD", 0, None), (0, "USD", 0, None), (-5, "USD", 0, None),
                 (12.34, "USD", 13, ACCENT_RED), (25, "USD", 27, ACCENT_YELLOW),
-                (100, "USD", 111, ACCENT_GREEN), (150, "USD", 111, ACCENT_GREEN),
-                (100, "CNY", 0, None),
+                (20, "USD", 22, ACCENT_RED), (50, "USD", 55, ACCENT_YELLOW),
+                (100, "USD", 111, ACCENT_GREEN), (150, "USD", 55, BALANCE_LAYER_COLORS[1]),
+                (100, "CNY", 111, ACCENT_GREEN),
             ):
                 for error in ("", "请求超时"):
                     with self.subTest(amount=amount, currency=currency, error=error):
                         w._supergpt_balance = None if amount is None else {"balance": amount, "currency": currency}
                         w._supergpt_error = error
                         painter = _OverviewPainter()
-                        with patch.object(painter, "setBrush") as brush, patch.object(painter, "drawRoundedRect") as draw_bar:
-                            w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
+                        w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
                         self.assertEqual(painter.text_records[0][2], TEXT_COLOR)
                         self.assertEqual(painter.text_records[1][2], DIM if amount is None else TEXT_COLOR)
-                        self.assertEqual(draw_bar.call_args_list[0].args[:4], (133, 44, 111, 14))
-                        self.assertEqual(draw_bar.call_count, 2 if fill else 1)
+                        self.assertEqual(painter.bar_records[0][0], (133, 44, 111, 14))
+                        self.assertEqual(len(painter.bar_records), 2 if fill else 1)
+                        self.assertEqual(painter.bar_records[0][1],
+                                         ACCENT_GREEN if amount == 150 else BAR_BG)
                         if fill:
-                            self.assertEqual(draw_bar.call_args_list[-1].args[:4], (133, 44, fill, 14))
-                            self.assertEqual(brush.call_args.args[0].color(), color)
+                            self.assertEqual(painter.bar_records[-1], ((133, 44, fill, 14), color))
+        finally:
+            w.close()
+
+    def test_balance_layer_boundaries_and_decreasing_balance(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        green, blue, purple = BALANCE_LAYER_COLORS[:3]
+        try:
+            for currency in ("USD", "CNY"):
+                for amount, layers, fraction, width, background, color in (
+                    (100.01, 2, 0.0001, 1, green, blue),
+                    (199.99, 2, 0.9999, 110, green, blue),
+                    (200, 2, 1.0, 111, green, blue),
+                    (200.01, 3, 0.0001, 1, blue, purple),
+                    (250, 3, 0.5, 55, blue, purple),
+                    (200, 2, 1.0, 111, green, blue),
+                    (100, 1, 1.0, 111, BAR_BG, green),
+                ):
+                    with self.subTest(amount=amount, currency=currency):
+                        w._on_supergpt_balance_done(
+                            {"ok": True, "balance": amount, "currency": currency})
+                        actual_layers, actual_fraction = w._supergpt_balance_layers()
+                        self.assertEqual(actual_layers, layers)
+                        self.assertAlmostEqual(actual_fraction, fraction)
+                        painter = _OverviewPainter()
+                        w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
+                        self.assertEqual(painter.bar_records, [
+                            ((133, 44, 111, 14), background), ((133, 44, width, 14), color),
+                        ])
+                        marker = [r for r in painter.text_records if r[0].y() == 44]
+                        self.assertEqual([r[1] for r in marker], [f"×{layers}"] if layers > 1 else [])
+                        if marker:
+                            self.assertEqual(marker[0][0].x(), 133 + 3)
+                            self.assertEqual(marker[0][0].y(), 44)
+                            self.assertEqual(marker[0][0].right(), 133 + 111 - 4)
+                            self.assertEqual(marker[0][2].getRgb()[:3], (20, 20, 20))
+                            self.assertEqual(marker[0][3].pointSize(), 7)
+                            self.assertEqual(marker[0][4], Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                        self.assertEqual(painter._font, painter.text_records[1][3])
+                        self.assertEqual(painter._pen.color(), TEXT_COLOR)
+                        self.assertIn(f"每层 100 {currency}，{layers} 层", w.toolTip())
+        finally:
+            w.close()
+
+    def test_huge_balances_draw_only_two_visible_layers_and_elide_marker(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            for amount in (123456789.12, sys.float_info.max):
+                with self.subTest(amount=amount):
+                    w._on_supergpt_balance_done(
+                        {"ok": True, "balance": amount, "currency": "USD"})
+                    painter = _OverviewPainter()
+                    w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
+                    self.assertEqual(len(painter.bar_records), 2)
+                    layers, fraction = w._supergpt_balance_layers()
+                    self.assertGreater(layers, 1)
+                    self.assertGreater(fraction, 0)
+                    self.assertLessEqual(fraction, 1)
+                    marker = painter.text_records[-1]
+                    self.assertEqual(marker[0].x(), 133 + 3)
+                    self.assertEqual(marker[0].y(), 44)
+                    self.assertEqual(marker[0].right(), 133 + 111 - 4)
+                    self.assertEqual(marker[2].getRgb()[:3], (20, 20, 20))
+                    self.assertEqual(marker[3].pointSize(), 7)
+                    self.assertEqual(marker[4], Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    self.assertLessEqual(QFontMetrics(marker[3]).horizontalAdvance(marker[1]), marker[0].width())
+                    self.assertTrue(marker[1].startswith("×"))
+                    self.assertIn(f"{layers} 层", w.toolTip())
+                    self.assertIn(w._supergpt_balance_text(), w.toolTip())
+                    if amount == sys.float_info.max:
+                        self.assertIn("…", marker[1])
+                        self.assertNotEqual(marker[1], f"×{layers}")
+        finally:
+            w.close()
+
+    def test_multi_layer_balance_does_not_change_window_size_on_mode_switch(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            size = w.size()
+            w._on_supergpt_balance_done({"ok": True, "balance": 250, "currency": "CNY"})
+            for mode in (MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE):
+                w._set_display_mode(mode)
+                self.assertEqual(w.size(), size)
+                self.assertEqual(w.height(), BASE_HEIGHT)
         finally:
             w.close()
 
@@ -469,7 +561,7 @@ class TestSuperGPTBalance(unittest.TestCase):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         try:
             self.assertEqual(w._supergpt_balance_text(), "--")
-            data = {"ok": True, "balance": 12.34, "currency": "USD", "error": None}
+            data = {"ok": True, "balance": 250, "currency": "USD", "error": None}
             w._on_supergpt_balance_done(data)
             last_update = w._supergpt_last_update
             self.assertTrue(last_update)
@@ -477,6 +569,9 @@ class TestSuperGPTBalance(unittest.TestCase):
             w._set_gpt_route("supergpt")
             painter = _OverviewPainter()
             w._paint_overview(painter)
+            original_bars = painter.bar_records
+            original_markers = [(r[0], r[1]) for r in painter.text_records if r[0].y() == 44]
+            self.assertEqual(original_markers, [(QRect(136, 44, 105, 14), "×3")])
             self.assertEqual(next(row[2] for row in painter.text_records if row[1] == "API余额"), ACCENT_GREEN)
             w._on_supergpt_balance_done({"ok": False, "balance": None, "error": "请求超时"})
             self.assertIs(w._supergpt_balance, data)
@@ -486,7 +581,11 @@ class TestSuperGPTBalance(unittest.TestCase):
             painter = _OverviewPainter()
             w._paint_overview(painter)
             self.assertEqual(next(row[2] for row in painter.text_records if row[1] == "API余额"), ACCENT_GREEN)
-            self.assertEqual(next(row[2] for row in painter.text_records if row[1] == "$12.34"), TEXT_COLOR)
+            self.assertEqual(next(row[2] for row in painter.text_records
+                                  if row[0].x() > 133 and row[0].y() == 24), TEXT_COLOR)
+            self.assertEqual(painter.bar_records, original_bars)
+            self.assertEqual([(r[0], r[1]) for r in painter.text_records if r[0].y() == 44], original_markers)
+            self.assertIn("每层 100 USD，3 层，当前层 50.00%", w.toolTip())
             w._on_supergpt_balance_done(data)
             self.assertEqual(w._supergpt_error, "")
         finally:
