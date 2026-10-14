@@ -963,7 +963,7 @@ class TokenWidget(QWidget):
             self._paint_third_party(p)
         elif self._plan_total > 0:
             pct = self._plan_used / self._plan_total
-            pct_text = f"{pct * 100:.1f}%"
+            pct_text = self._format_overview_percent(pct * 100, True)
 
             p.drawText(16, 42, "Token Plan")
             p.drawText(200, 42, pct_text)
@@ -1067,19 +1067,22 @@ class TokenWidget(QWidget):
         p.setPen(QPen(DIM))
         p.drawText(update_x, status_y, update_text)
 
-    def _draw_usage_progress_bar(self, p: QPainter, used_fraction: float):
-        """Draw the shared usage progress bar for MiMo and API Usage modes."""
+    def _draw_usage_progress_bar(self, p: QPainter, used_fraction: float | None):
+        """按剩余量绘制详情进度条，输入仍为已用比例；未知数据留空。"""
         bar_x, bar_y, bar_w, bar_h = 16, 50, 228, 14
-        usage_fraction = float(used_fraction)
+        percent = self._normalize_overview_percent(
+            float(used_fraction) * 100 if used_fraction is not None else None
+        )
+        remaining_fraction = 0.0 if percent is None else (100 - percent) / 100.0
 
         p.setBrush(QBrush(BAR_BG))
         p.drawRoundedRect(bar_x, bar_y, bar_w, bar_h, 4, 4)
 
-        fill_w = int(bar_w * min(usage_fraction, 1.0))
+        fill_w = int(bar_w * remaining_fraction)
         if fill_w > 0:
             # 当填充宽度较小时，限制圆角半径，避免超出外框圆角范围。
             fill_radius = min(4, fill_w // 2)
-            p.setBrush(QBrush(_bar_color(1 - usage_fraction)))
+            p.setBrush(QBrush(_bar_color(remaining_fraction)))
 
             # 将填充裁剪到外框路径内，确保小比例填充也不会露出外框圆角。
             p.save()
@@ -1422,11 +1425,11 @@ class TokenWidget(QWidget):
             p.drawRoundedRect(cell_x, bar_y, bar_w, bar_h, 4, 4)
 
             percent = self._normalize_overview_percent(raw_percent)
-            fraction = 0.0 if percent is None else percent / 100.0
+            fraction = 0.0 if percent is None else (100 - percent) / 100.0
             fill_w = int(bar_w * fraction)
             if fill_w > 0:
                 fill_radius = min(4, fill_w // 2)
-                p.setBrush(QBrush(_bar_color(1 - fraction)))
+                p.setBrush(QBrush(_bar_color(fraction)))
                 p.save()
                 bar_path = QPainterPath()
                 bar_path.addRoundedRect(QRectF(cell_x, bar_y, bar_w, bar_h), 4, 4)
@@ -1480,44 +1483,44 @@ class TokenWidget(QWidget):
 
     def _draw_dual_usage_bar(self, p: QPainter, x: int, y: int, width: int, height: int,
                              primary: dict | None, secondary: dict | None):
-        """Draw two independent usage bars, leaving missing windows empty."""
+        """按剩余量绘制两个独立窗口，缺失窗口留空。"""
         gap = DUAL_BAR_GAP
         segment_width = (width - gap) // 2
         for segment_x, window in (
             (x, primary),
             (x + segment_width + gap, secondary),
         ):
-            percent = self._normalize_overview_percent(window.get("used_percent")) if isinstance(window, dict) else None
-            fraction = 0.0 if percent is None else percent / 100.0
+            percent = self._normalize_overview_percent(_window_used_percent(window))
+            fraction = 0.0 if percent is None else (100 - percent) / 100.0
             self._draw_overview_bar(p, segment_x, y, segment_width, height,
-                                    fraction, _bar_color(1 - fraction))
+                                    fraction, _bar_color(fraction))
 
     def _paint_third_party(self, p: QPainter):
         """Paint third-party usage data in the content area."""
         d = self._tp_data or {}
         has_data = self._tp_data is not None
         is_valid = d.get("is_valid", False)
-        remaining_pct = d.get("remaining_percent", 0)
-        used_pct = d.get("used_percent", 0)
+        used_pct = self._normalize_overview_percent(_window_used_percent(d))
 
         # Remaining percentage prominently
         p.setPen(QPen(ACCENT_GREEN if has_data and is_valid else DIM))
         font_accent = QFont("Microsoft YaHei", 10, QFont.Weight.Bold)
         p.setFont(font_accent)
-        remaining_text = f"剩余 {remaining_pct:.2f}%" if has_data else "剩余 --"
+        remaining_text = f"剩余 {100 - used_pct:.2f}%" if used_pct is not None else "剩余 --"
         p.drawText(16, 42, remaining_text)
 
-        # Progress bar (always visible; fill represents used percentage)
+        # 进度条始终可见，按剩余比例填充，未知数据留空。
         font_small = QFont("Microsoft YaHei", 9)
         p.setFont(font_small)
-        used_frac = max(0.0, min(float(used_pct) / 100.0, 1.0)) if has_data else 0.0
+        used_frac = used_pct / 100.0 if used_pct is not None else None
         p.setPen(QPen(TEXT_COLOR))
         self._draw_usage_progress_bar(p, used_frac)
 
         # Details line
         p.setPen(QPen(TEXT_COLOR))
         if has_data:
-            details = f"已用 {used_pct:.2f}% | {d.get('window', '7d')} | {d.get('total_percent', 100)}%"
+            used_text = f"{used_pct:.2f}%" if used_pct is not None else "--"
+            details = f"已用 {used_text} | {d.get('window', '7d')} | {d.get('total_percent', 100)}%"
         else:
             details = "等待 API 数据 | 7d | 100%"
         p.drawText(16, 80, details)

@@ -46,7 +46,7 @@ from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT, DUAL_BAR_GAP,
-    BG_COLOR, TEXT_COLOR, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, DIM, SuperGPTBalanceWorker, _format_overview_expiry,
+    BG_COLOR, BAR_BG, TEXT_COLOR, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, DIM, SuperGPTBalanceWorker, _format_overview_expiry,
     _parse_reset_datetime, _format_overview_reset_time, _format_overview_reset_days,
 )
 from router_control import RouterResult  # noqa: E402
@@ -82,6 +82,7 @@ class _OverviewPainter:
         self._pen = None
         self._font = QFont()
         self.text_records = []
+        self.bar_records = []
 
     def setPen(self, pen):
         self._pen = pen
@@ -89,8 +90,8 @@ class _OverviewPainter:
     def setFont(self, font):
         self._font = QFont(font)
 
-    def setBrush(self, _brush):
-        pass
+    def setBrush(self, brush):
+        self._brush = brush
 
     def drawText(self, *args):
         rect = args[0] if isinstance(args[0], QRect) else None
@@ -99,8 +100,8 @@ class _OverviewPainter:
             (rect, args[-1], self._pen.color(), QFont(self._font), alignment)
         )
 
-    def drawRoundedRect(self, *_args):
-        pass
+    def drawRoundedRect(self, *args):
+        self.bar_records.append((args[:4], self._brush.color()))
 
     def save(self):
         pass
@@ -110,6 +111,93 @@ class _OverviewPainter:
 
     def setClipPath(self, _path):
         pass
+
+
+class TestRemainingProgressBars(unittest.TestCase):
+    # 已用比例、剩余比例与颜色，覆盖两个阈值及其相邻值。
+    cases = (
+        (0, 1.0, ACCENT_GREEN), (49.9, 0.501, ACCENT_GREEN),
+        (50, 0.5, ACCENT_YELLOW), (50.1, 0.499, ACCENT_YELLOW),
+        (79.9, 0.201, ACCENT_YELLOW), (80, 0.2, ACCENT_RED),
+        (80.1, 0.199, ACCENT_RED), (100, 0.0, None),
+        (-10, 1.0, ACCENT_GREEN), (120, 0.0, None),
+    )
+
+    def assert_bar(self, painter, x, y, width, height, fraction, color):
+        records = [r for r in painter.bar_records if r[0][:2] == (x, y)]
+        self.assertEqual(records[0], ((x, y, width, height), BAR_BG))
+        self.assertEqual(len(records), 2 if fraction else 1)
+        if fraction:
+            self.assertEqual(records[1], ((x, y, int(width * fraction), height), color))
+
+    def test_overview_all_quota_bars_use_remaining_width_and_color(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake",
+                         third_party_api_key="k", gpt_session_cookie="fake")
+        try:
+            for used, remaining, color in self.cases:
+                with self.subTest(used=used):
+                    w._plan_total, w._plan_used = 100, used
+                    window = {"used_percent": used}
+                    w._tp_data = {**window, "daily": window}
+                    w._gpt_data = {**window, "primary": window, "secondary": window}
+                    painter = _OverviewPainter()
+                    w._paint_overview(painter)
+                    for x, y in ((16, 44), (16, 78), (133, 78), (16, 112), (133, 112)):
+                        self.assert_bar(painter, x, y, 111, 14, remaining, color)
+        finally:
+            w.close()
+
+    def test_shared_detail_bar_uses_remaining_width_and_color(self):
+        w = _make_widget()
+        try:
+            for used, remaining, color in self.cases:
+                with self.subTest(used=used):
+                    painter = _OverviewPainter()
+                    w._draw_usage_progress_bar(painter, used / 100)
+                    self.assert_bar(painter, 16, 50, 228, 14, remaining, color)
+            for used in (None, float("nan"), float("inf"), -float("inf")):
+                with self.subTest(unknown=used):
+                    painter = _OverviewPainter()
+                    w._draw_usage_progress_bar(painter, used)
+                    self.assert_bar(painter, 16, 50, 228, 14, 0, None)
+        finally:
+            w.close()
+
+    def test_missing_or_unknown_overview_windows_stay_empty(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE, cookie="fake",
+                         third_party_api_key="k", gpt_session_cookie="fake")
+        try:
+            for window in (None, {}, {"used_percent": None},
+                           {"used_percent": float("nan")}, {"used_percent": float("inf")},
+                           {"used_percent": "unknown"},
+                           {"used_percent": 0, "has_rate_limit": False}):
+                with self.subTest(window=window):
+                    w._plan_total = 0
+                    w._tp_data = {"daily": window, "has_rate_limit": False, "used_percent": 0}
+                    w._gpt_data = {"primary": window, "secondary": window}
+                    painter = _OverviewPainter()
+                    w._paint_overview(painter)
+                    for x, y in ((16, 44), (16, 78), (133, 78), (16, 112), (133, 112)):
+                        self.assert_bar(painter, x, y, 111, 14, 0, None)
+        finally:
+            w.close()
+
+    def test_wlb_detail_unknown_data_stays_empty_and_known_data_matches_label(self):
+        w = _make_widget(display_mode=THIRD_PARTY_MODE)
+        try:
+            for data in (None, {}, {"used_percent": 0, "has_rate_limit": False},
+                         {"used_percent": float("nan")}, {"used_percent": 80}):
+                with self.subTest(data=data):
+                    w._tp_data = data
+                    painter = _OverviewPainter()
+                    w._paint_third_party(painter)
+                    known = data == {"used_percent": 80}
+                    self.assert_bar(painter, 16, 50, 228, 14,
+                                    0.2 if known else 0, ACCENT_RED if known else None)
+                    self.assertEqual(painter.text_records[0][1],
+                                     "剩余 20.00%" if known else "剩余 --")
+        finally:
+            w.close()
 
 
 class TestModeCycle(unittest.TestCase):
