@@ -46,7 +46,7 @@ from widget import (  # noqa: E402
     TokenWidget,
     MIMO_MODE, THIRD_PARTY_MODE, OVERVIEW_MODE,
     BASE_HEIGHT, OVERVIEW_HEIGHT, DUAL_BAR_GAP,
-    BG_COLOR, TEXT_COLOR, ACCENT_GREEN, DIM, SuperGPTBalanceWorker, _format_overview_expiry,
+    BG_COLOR, TEXT_COLOR, ACCENT_GREEN, ACCENT_YELLOW, ACCENT_RED, DIM, SuperGPTBalanceWorker, _format_overview_expiry,
     _parse_reset_datetime, _format_overview_reset_time, _format_overview_reset_days,
 )
 from router_control import RouterResult  # noqa: E402
@@ -301,19 +301,21 @@ class TestOverviewPercentFormat(unittest.TestCase):
         self.assertEqual(TokenWidget._format_overview_percent(None, False), "\u672a\u914d\u7f6e")
 
     def test_no_data(self):
-        self.assertEqual(TokenWidget._format_overview_percent(None, True), "--")
+        for value in (None, "invalid", float("nan"), float("inf")):
+            with self.subTest(value=value):
+                self.assertEqual(TokenWidget._format_overview_percent(value, True), "--")
 
     def test_zero(self):
-        self.assertEqual(TokenWidget._format_overview_percent(0.0, True), "0.0%")
+        self.assertEqual(TokenWidget._format_overview_percent(0.0, True), "100.0%")
 
     def test_mid(self):
-        self.assertEqual(TokenWidget._format_overview_percent(42.5, True), "42.5%")
+        self.assertEqual(TokenWidget._format_overview_percent(42.5, True), "57.5%")
 
     def test_clamp_above(self):
-        self.assertEqual(TokenWidget._format_overview_percent(150.0, True), "100.0%")
+        self.assertEqual(TokenWidget._format_overview_percent(150.0, True), "0.0%")
 
     def test_clamp_below(self):
-        self.assertEqual(TokenWidget._format_overview_percent(-10.0, True), "0.0%")
+        self.assertEqual(TokenWidget._format_overview_percent(-10.0, True), "100.0%")
 
 
 class TestSuperGPTBalance(unittest.TestCase):
@@ -349,30 +351,29 @@ class TestSuperGPTBalance(unittest.TestCase):
         finally:
             w.close()
 
-    def test_balance_bar_uses_100_usd_and_keeps_stale_values_gray(self):
+    def test_balance_bar_uses_100_usd_and_keeps_stale_colors(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         try:
-            for amount, currency, fill in (
-                (None, "USD", 0), (0, "USD", 0), (-5, "USD", 0),
-                (25, "USD", 27), (100, "USD", 111), (150, "USD", 111),
-                (100, "CNY", 0),
+            for amount, currency, fill, color in (
+                (None, "USD", 0, None), (0, "USD", 0, None), (-5, "USD", 0, None),
+                (12.34, "USD", 13, ACCENT_RED), (25, "USD", 27, ACCENT_YELLOW),
+                (100, "USD", 111, ACCENT_GREEN), (150, "USD", 111, ACCENT_GREEN),
+                (100, "CNY", 0, None),
             ):
-                with self.subTest(amount=amount, currency=currency):
-                    w._supergpt_balance = None if amount is None else {"balance": amount, "currency": currency}
-                    painter = _OverviewPainter()
-                    with patch.object(painter, "drawRoundedRect") as draw_bar:
-                        w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
-                    self.assertEqual(draw_bar.call_args_list[0].args[:4], (133, 44, 111, 14))
-                    self.assertEqual(draw_bar.call_count, 2 if fill else 1)
-                    if fill:
-                        self.assertEqual(draw_bar.call_args_list[-1].args[:4], (133, 44, fill, 14))
-            w._supergpt_balance = {"balance": 25, "currency": "USD"}
-            w._supergpt_error = "请求超时"
-            painter = _OverviewPainter()
-            with patch.object(painter, "setBrush") as brush, patch.object(painter, "drawRoundedRect") as draw_bar:
-                w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
-            self.assertEqual(draw_bar.call_args_list[-1].args[2], 27)
-            self.assertEqual(brush.call_args.args[0].color(), DIM)
+                for error in ("", "请求超时"):
+                    with self.subTest(amount=amount, currency=currency, error=error):
+                        w._supergpt_balance = None if amount is None else {"balance": amount, "currency": currency}
+                        w._supergpt_error = error
+                        painter = _OverviewPainter()
+                        with patch.object(painter, "setBrush") as brush, patch.object(painter, "drawRoundedRect") as draw_bar:
+                            w._paint_supergpt_balance(painter, 133, 38, 44, 111, 14)
+                        self.assertEqual(painter.text_records[0][2], TEXT_COLOR)
+                        self.assertEqual(painter.text_records[1][2], DIM if amount is None else TEXT_COLOR)
+                        self.assertEqual(draw_bar.call_args_list[0].args[:4], (133, 44, 111, 14))
+                        self.assertEqual(draw_bar.call_count, 2 if fill else 1)
+                        if fill:
+                            self.assertEqual(draw_bar.call_args_list[-1].args[:4], (133, 44, fill, 14))
+                            self.assertEqual(brush.call_args.args[0].color(), color)
         finally:
             w.close()
 
@@ -396,7 +397,8 @@ class TestSuperGPTBalance(unittest.TestCase):
             self.assertIn("请求超时", w.toolTip())
             painter = _OverviewPainter()
             w._paint_overview(painter)
-            self.assertTrue(all(row[2] == DIM for row in painter.text_records if row[1] in ("API余额", "$12.34")))
+            self.assertEqual(next(row[2] for row in painter.text_records if row[1] == "API余额"), ACCENT_GREEN)
+            self.assertEqual(next(row[2] for row in painter.text_records if row[1] == "$12.34"), TEXT_COLOR)
             w._on_supergpt_balance_done(data)
             self.assertEqual(w._supergpt_error, "")
         finally:
@@ -493,7 +495,7 @@ class TestOverviewExpiryRendering(unittest.TestCase):
         w, expiry_date, painter = self._render_first_row()
         expiry_text = _format_overview_expiry(expiry_date)
         records = self._first_row_records(painter)
-        title_records = [record for record in records if record[1] != "42.5%"]
+        title_records = [record for record in records if record[1] != "57.5%"]
 
         self.assertEqual(expiry_text, "2天")
         self.assertEqual(
@@ -512,7 +514,7 @@ class TestOverviewExpiryRendering(unittest.TestCase):
                 title_records = [
                     record
                     for record in self._first_row_records(painter)
-                    if record[1] != "42.5%"
+                    if record[1] != "57.5%"
                 ]
                 self.assertEqual(title_records[0][2], TEXT_COLOR)
                 w.close()
@@ -534,17 +536,17 @@ class TestOverviewExpiryRendering(unittest.TestCase):
     def test_first_row_text_uses_nine_point_font_and_leaves_percent_room(self):
         w, expiry_date, painter = self._render_first_row(row_width=228)
         records = self._first_row_records(painter)
-        percent_record = next(record for record in records if record[1] == "42.5%")
+        percent_record = next(record for record in records if record[1] == "57.5%")
         percent_start = (
             percent_record[0].right()
             + 1
-            - QFontMetrics(percent_record[3]).horizontalAdvance("42.5%")
+            - QFontMetrics(percent_record[3]).horizontalAdvance("57.5%")
         )
 
         self.assertTrue(records)
         self.assertTrue(all(record[3].family() == "Microsoft YaHei" for record in records))
         self.assertTrue(all(record[3].pointSize() == 9 for record in records))
-        self.assertLess(max(record[0].right() for record in records if record[1] != "42.5%"), percent_start)
+        self.assertLess(max(record[0].right() for record in records if record[1] != "57.5%"), percent_start)
         w.close()
 
 
@@ -623,7 +625,7 @@ class TestWlbResetRendering(unittest.TestCase):
         texts = [record[1] for record in row_records]
         self.assertEqual(
             texts,
-            [f"WLB - {_format_overview_reset_time(reset_at)}", "12.5%", "5天", "42.5%"],
+            [f"WLB - {_format_overview_reset_time(reset_at)}", "87.5%", "5天", "57.5%"],
         )
         self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
         self.assertFalse(any("重置" in text or "还剩" in text for text in texts))
@@ -666,7 +668,7 @@ class TestWlbResetRendering(unittest.TestCase):
             record for record in painter.text_records if record[0] and record[0].y() == 58
         ]
         texts = [record[1] for record in row_records]
-        self.assertEqual(texts, ["WLB - --:--", "--", "--天", "42.5%"])
+        self.assertEqual(texts, ["WLB - --:--", "--", "--天", "57.5%"])
         self.assertTrue(all(record[3].pointSize() == 9 for record in row_records))
         w.close()
 
@@ -690,9 +692,9 @@ class TestWlbResetRendering(unittest.TestCase):
             texts,
             [
                 f"GPT - {_format_overview_reset_time(primary_reset.timestamp())}",
-                "12.5%",
+                "87.5%",
                 _format_overview_reset_days(None, 5 * 86400),
-                "42.5%",
+                "57.5%",
             ],
         )
         segment_width = (228 - DUAL_BAR_GAP) // 2
@@ -725,7 +727,7 @@ class TestWlbResetRendering(unittest.TestCase):
         ]
         self.assertEqual(
             [record[1] for record in row_records],
-            ["GPT - --:--", "12.5%", "--天", "42.5%"],
+            ["GPT - --:--", "87.5%", "--天", "57.5%"],
         )
         w.close()
 
@@ -762,9 +764,9 @@ class TestOverviewTooltipLines(unittest.TestCase):
         w = _make_widget()
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
-        self.assertIn("Token Plan: \u672a\u914d\u7f6e", joined)
-        self.assertIn("WLB \u65e5\u9650\u989d: \u672a\u914d\u7f6e", joined)
-        self.assertIn("WLB \u5468\u9650\u989d: \u672a\u914d\u7f6e", joined)
+        self.assertIn("Token Plan 剩余: \u672a\u914d\u7f6e", joined)
+        self.assertIn("WLB \u65e5\u9650\u989d剩余: \u672a\u914d\u7f6e", joined)
+        self.assertIn("WLB \u5468\u9650\u989d剩余: \u672a\u914d\u7f6e", joined)
         w.close()
 
     def test_mimo_configured_no_data(self):
@@ -772,7 +774,7 @@ class TestOverviewTooltipLines(unittest.TestCase):
         w._plan_total = 0
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
-        self.assertIn("Token Plan: --", joined)
+        self.assertIn("Token Plan 剩余: --", joined)
         w.close()
 
     def test_mimo_with_data(self):
@@ -781,7 +783,7 @@ class TestOverviewTooltipLines(unittest.TestCase):
         w._plan_used = 50
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
-        self.assertIn("Token Plan: 25.0%", joined)
+        self.assertIn("Token Plan 剩余: 75.0%", joined)
         w.close()
 
     def test_tp_with_data(self):
@@ -791,8 +793,8 @@ class TestOverviewTooltipLines(unittest.TestCase):
                        "is_valid": True, "window": "7d", "total_percent": 100}
         lines = w._build_overview_tooltip_lines()
         joined = "\n".join(lines)
-        self.assertIn("WLB \u65e5\u9650\u989d: 6.2%", joined)
-        self.assertIn("WLB \u5468\u9650\u989d: 12.5%", joined)
+        self.assertIn("WLB \u65e5\u9650\u989d剩余: 93.8%", joined)
+        self.assertIn("WLB \u5468\u9650\u989d剩余: 87.5%", joined)
         w.close()
 
     def test_error_included_via_apply(self):
@@ -856,7 +858,7 @@ class TestThirdPartyCallbackExtraction(unittest.TestCase):
         wrapper = {"ok": True, "data": parsed, "error": None, "url": "http://example.com"}
         w._on_third_party_fetch_done(wrapper)
         tooltip = w.toolTip()
-        self.assertIn("55.5%", tooltip)
+        self.assertIn("WLB 周限额剩余: 44.5%", tooltip)
         w.close()
 
 
@@ -871,8 +873,8 @@ class TestGPTCallback(unittest.TestCase):
 
         lines = w._build_overview_tooltip_lines()
 
-        self.assertIn("GPT 5\u5c0f\u65f6: 20.0%", lines)
-        self.assertIn("GPT \u5468\u9650\u989d: 40.0%", lines)
+        self.assertIn("GPT 5\u5c0f\u65f6剩余: 80.0%", lines)
+        self.assertIn("GPT \u5468\u9650\u989d剩余: 60.0%", lines)
         w.close()
 
     def test_failure_keeps_last_data_and_marks_it_stale(self):

@@ -596,7 +596,7 @@ class TokenWidget(QWidget):
         percent = cls._normalize_overview_percent(value)
         if percent is None:
             return "--"
-        return f"{percent:.1f}%"
+        return f"{100 - percent:.1f}%"
 
     @staticmethod
     def _overview_row_metrics(index: int):
@@ -657,17 +657,17 @@ class TokenWidget(QWidget):
             lines.append(f"SuperGPT{stale}: {self._supergpt_error}")
         has_cookie = bool(self.cfg.get("cookie", "").strip())
         mimo_pct = (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None
-        lines.append(f"Token Plan: {self._format_overview_percent(mimo_pct, has_cookie)}")
+        lines.append(f"Token Plan 剩余: {self._format_overview_percent(mimo_pct, has_cookie)}")
         has_api_key = bool(self.cfg.get("third_party_api_key", "").strip())
         tp_weekly = self._tp_data if has_api_key and isinstance(self._tp_data, dict) else None
         tp_daily = tp_weekly.get("daily") if isinstance(tp_weekly, dict) else None
         tp_daily_pct = _window_used_percent(tp_daily)
         tp_weekly_pct = _window_used_percent(tp_weekly)
         lines.append(
-            f"WLB 日限额: {self._format_overview_percent(tp_daily_pct, has_api_key)}"
+            f"WLB 日限额剩余: {self._format_overview_percent(tp_daily_pct, has_api_key)}"
         )
         lines.append(
-            f"WLB 周限额: {self._format_overview_percent(tp_weekly_pct, has_api_key)}"
+            f"WLB 周限额剩余: {self._format_overview_percent(tp_weekly_pct, has_api_key)}"
         )
         reset_text = _format_reset_datetime(*_reset_parts(tp_weekly))
         if reset_text:
@@ -676,8 +676,8 @@ class TokenWidget(QWidget):
         gpt_pct = self._gpt_data.get("used_percent") if isinstance(self._gpt_data, dict) else None
         gpt_primary = self._gpt_data.get("primary") if isinstance(self._gpt_data, dict) else None
         primary_pct = _window_used_percent(gpt_primary)
-        lines.append(f"GPT 5\u5c0f\u65f6: {self._format_overview_percent(primary_pct, has_gpt)}")
-        lines.append(f"GPT \u5468\u9650\u989d: {self._format_overview_percent(gpt_pct, has_gpt)}")
+        lines.append(f"GPT 5\u5c0f\u65f6剩余: {self._format_overview_percent(primary_pct, has_gpt)}")
+        lines.append(f"GPT \u5468\u9650\u989d剩余: {self._format_overview_percent(gpt_pct, has_gpt)}")
         return lines
 
     def _refresh_error_state(self):
@@ -1441,7 +1441,6 @@ class TokenWidget(QWidget):
         return f"{symbol}{self._supergpt_balance['balance']:.2f}"
 
     def _paint_supergpt_balance(self, p, x, label_y, bar_y, width, height):
-        stale = bool(self._supergpt_error)
         text = self._supergpt_balance_text()
         title = "API余额"
         font = QFont("Microsoft YaHei", 9)
@@ -1452,17 +1451,16 @@ class TokenWidget(QWidget):
         value_x = x + label_width + 4
         value_width = max(0, width - label_width - 4)
         p.setFont(font)
-        p.setPen(QPen(DIM if stale else ACCENT_GREEN if self._gpt_route == "supergpt" else TEXT_COLOR))
+        p.setPen(QPen(ACCENT_GREEN if self._gpt_route == "supergpt" else TEXT_COLOR))
         p.drawText(QRect(x, label_y - 14, label_width, 18), Qt.AlignmentFlag.AlignVCenter, title)
-        p.setPen(QPen(DIM if stale or self._supergpt_balance is None else TEXT_COLOR))
+        p.setPen(QPen(DIM if self._supergpt_balance is None else TEXT_COLOR))
         p.drawText(QRect(value_x, label_y - 14, value_width, 18),
                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                    metrics.elidedText(text, Qt.TextElideMode.ElideRight, value_width))
         fraction = 0.0
         if self._supergpt_balance is not None and self._supergpt_balance["currency"] == "USD":
             fraction = max(0.0, min(self._supergpt_balance["balance"] / 100.0, 1.0))
-        self._draw_overview_bar(p, x, bar_y, width, height, fraction,
-                                DIM if stale else _bar_color(fraction))
+        self._draw_overview_bar(p, x, bar_y, width, height, fraction, _bar_color(fraction))
 
     def _draw_overview_bar(self, p, x, y, width, height, fraction, color):
         p.setBrush(QBrush(BAR_BG))
