@@ -321,14 +321,16 @@ def _parse_gpt_windows(data):
     if rl:
         primary = primary or rl.get("primary_window")
         secondary = secondary or rl.get("secondary_window")
-        # Some responses put the weekly window in primary_window.
-        if secondary is None and isinstance(primary, dict):
-            try:
-                seconds = int(primary.get("limit_window_seconds", 0) or 0)
-            except (TypeError, ValueError):
-                seconds = 0
-            if seconds == GPT_WEEKLY_WINDOW_SECONDS:
-                secondary, primary = primary, None
+
+    # 只有一个窗口时，按时长识别放在 primary 中的周窗口。
+    if secondary is None and isinstance(primary, dict):
+        try:
+            seconds = int(primary.get("limit_window_seconds") or
+                          int(primary.get("window_minutes", 0) or 0) * 60)
+        except (TypeError, ValueError, OverflowError):
+            seconds = 0
+        if seconds == GPT_WEEKLY_WINDOW_SECONDS:
+            secondary, primary = primary, None
 
     return {"primary": _parse_gpt_window(primary), "secondary": _parse_gpt_window(secondary)}
 

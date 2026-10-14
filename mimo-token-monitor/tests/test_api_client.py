@@ -155,8 +155,8 @@ class TestGPTWeeklyUsageParser(unittest.TestCase):
 
         data = {
             "rate_limits": {
-                "primary": {"used_percent": 12.5, "reset_after_seconds": 3600},
-                "secondary": {"used_percent": 42.5, "reset_after_seconds": 86400},
+                "primary": {"used_percent": 12.5, "window_minutes": 300, "reset_after_seconds": 3600},
+                "secondary": {"used_percent": 42.5, "window_minutes": 10080, "reset_after_seconds": 86400},
             }
         }
         result = _parse_gpt_windows(data)
@@ -175,10 +175,26 @@ class TestGPTWeeklyUsageParser(unittest.TestCase):
         self.assertEqual(result["secondary"]["used_percent"], 60.0)
 
     def test_only_primary_window_has_no_weekly_result(self):
-        from api_client import _parse_gpt_secondary_window
+        from api_client import _parse_gpt_windows, _parse_gpt_secondary_window
 
-        data = {"rate_limits": {"primary": {"used_percent": 10}}}
-        self.assertIsNone(_parse_gpt_secondary_window(data))
+        for minutes in (None, 300, 1440, "invalid"):
+            with self.subTest(minutes=minutes):
+                data = {"rate_limits": {"primary": {"used_percent": 10, "window_minutes": minutes}}}
+                self.assertIsNone(_parse_gpt_secondary_window(data))
+                self.assertEqual(_parse_gpt_windows(data)["primary"]["used_percent"], 10.0)
+
+    def test_rate_limits_weekly_primary_in_minutes(self):
+        from api_client import _gpt_result_with_windows
+
+        data = {"rate_limits": {
+            "primary": {"used_percent": 62, "window_minutes": 10080, "resets_at": 1792472967},
+            "secondary": None,
+        }}
+        result = _gpt_result_with_windows(data, "local_jsonl")
+        self.assertIsNone(result["primary"])
+        self.assertEqual(result["secondary"]["used_percent"], 62.0)
+        self.assertEqual(result["remaining_percent"], 38.0)
+        self.assertEqual(result["reset_at"], 1792472967)
 
     def test_new_format_rate_limits_list(self):
         from api_client import _parse_gpt_secondary_window
@@ -198,7 +214,7 @@ class TestGPTWeeklyUsageParser(unittest.TestCase):
         self.assertEqual(result["reset_after_seconds"], 3600)
 
     def test_old_format_weekly_primary_window(self):
-        from api_client import _parse_gpt_secondary_window
+        from api_client import _parse_gpt_windows, _parse_gpt_secondary_window
         data = {"rate_limit": {"secondary_window": None, "primary_window": {
             "used_percent": 30.0,
             "limit_window_seconds": 604800,
@@ -209,6 +225,7 @@ class TestGPTWeeklyUsageParser(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["used_percent"], 30.0)
         self.assertEqual(result["reset_at"], 1785923727)
+        self.assertIsNone(_parse_gpt_windows(data)["primary"])
 
     def test_old_format_five_hour_primary_is_not_weekly(self):
         from api_client import _parse_gpt_secondary_window
@@ -399,6 +416,7 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
         import pathlib
         import tempfile
         from unittest.mock import patch
+        import requests
         from api_client import fetch_gpt_weekly_usage
         with tempfile.TemporaryDirectory() as td:
             codex_dir = pathlib.Path(td) / ".codex"
@@ -407,14 +425,24 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             sessions.mkdir()
             jsonl_path = sessions / "rollout-2026.jsonl"
             # rate_limits as dict object (not list)
-            entry = {"payload": {"rate_limits": {"secondary": {"used_percent": 77.0}}}}
+            entry = {"payload": {"rate_limits": {
+                "primary": {"used_percent": 62, "window_minutes": 10080, "resets_at": 1792472967},
+                "secondary": None,
+            }}}
             jsonl_path.write_text(json.dumps(entry), encoding="utf-8")
-            with (patch("api_client._gpt_try_local_auth", return_value=None),
-                patch("api_client._gpt_try_session_cookie", return_value=None),
+            (codex_dir / "auth.json").write_text(
+                json.dumps({"tokens": {"access_token": "test-token"}}), encoding="utf-8"
+            )
+            with (patch("api_client.requests.get", side_effect=requests.exceptions.ConnectionError) as get,
                 patch("api_client._pl.Path.home", return_value=pathlib.Path(td))):
-                result = fetch_gpt_weekly_usage()
+                result = fetch_gpt_weekly_usage(session_cookie="test-cookie")
             self.assertTrue(result["ok"])
-            self.assertAlmostEqual(result["data"]["used_percent"], 77.0)
+            self.assertEqual(get.call_count, 4)
+            self.assertEqual(result["data"]["source"], "local_jsonl")
+            self.assertIsNone(result["data"]["primary"])
+            self.assertEqual(result["data"]["used_percent"], 62.0)
+            self.assertEqual(result["data"]["remaining_percent"], 38.0)
+            self.assertEqual(result["data"]["secondary"]["reset_at"], 1792472967)
 
     def test_http_error_returns_none(self):
         import json
