@@ -17,7 +17,7 @@ MiMo Token Plan、WLB、GPT 5 小时/周限额用量及 SuperGPT 账户余额监
 - 可拖动、半透明、置顶显示；标题栏图钉按钮可切换置顶状态，默认置顶并自动保存
 - **跨窗口边框吸附**：可与 ETF Tracker 悬浮窗相互吸附，主屏和副屏均支持，并兼容不同 DPI 的显示器
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip，并可直接重启悬浮窗
-- **Codex Router 维护**：从托盘查看当前状态、切换官方 / WLB / SuperGPT 路由，并开启、关闭或重启路由器
+- **Codex Router 维护**：从托盘查看当前状态、分别切换主代理和子代理的官方 / WLB / SuperGPT 路由，并开启、关闭或重启路由器
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 https://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态；接口返回 `reset_at` 时同时显示 7 日窗口重置日期
 - **用量总览页面**：第一行左侧为 Mimo 套餐用量及剩余天数，右侧为 API余额（SuperGPT 账户余额），金额右对齐、每 100 原币种为一层血条，在同一条内叠加颜色并在条内右侧显示层数。下方 WLB 日/周限额与 GPT 主/周窗口分别显示重置时分或剩余天数、右对齐剩余百分比和左右分段进度条
@@ -141,7 +141,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   - 双击托盘图标：恢复显示悬浮窗
   - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / Playwright 续期 /
     路由控制 / 重启悬浮窗 / 退出
-  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；可切换到 WLB / SuperGPT / GPT，也可开启、关闭或重启 Codex Router
+  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；主代理可选择自动（WLB → GPT → SuperGPT）或切换到 WLB / SuperGPT / GPT，子代理可在独立子菜单中切换供应商，也可开启、关闭或重启 Codex Router
   - 重启悬浮窗：退出当前进程并释放单实例锁后启动新实例
   - 悬停托盘图标：显示用量概览
 
@@ -151,10 +151,26 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   `~/.codex/codex-router/install-manifest.json` 读取当前源码目录。
 - “切换到 WLB”“切换到 SuperGPT”和“切换到 GPT”调用 Router 的
   `gpt-route.mjs wlb|supergpt|official`，不重启服务、不自动开启 Router。请先开启路由；
-  切换影响所有任务后续的原生 GPT 请求，已识别的 GPT 子代理固定走官方。
+  主代理切换影响所有任务后续的非子代理原生 GPT 请求。
   菜单勾选已确认的当前服务商，总览对应的 WLB / GPT 整行标题文字显示绿色；WLB
   单独页面的标题也同步变绿。SuperGPT 勾选菜单项并高亮余额标题，不高亮现有的官方 GPT / WLB
   用量栏。官方直连时标记 GPT；状态未知或 Router 不健康时不高亮。
+- “自动（WLB → GPT → SuperGPT）”调用 `gpt-route.mjs auto`，仅作用于主代理。
+  菜单勾选配置模式 `auto`，用量标题按 Router 返回的 `effectiveMode` 高亮实际档位；首次
+  请求尚未判断时不高亮。成功启用后由后续状态轮询读取有效档，失败不提前勾选或猜测路由。
+  主代理可用 `route auto` 启用自动模式，按 **WLB → 官方 GPT → SuperGPT** 的顺序选择；
+  额度恢复后，后续请求自动回到最高可用档，配置模式始终保持 `auto`。WLB 读取原始 `1d` / `7d`
+  窗口，任一额度耗尽即跳过。GPT 同时监控 5 小时和周窗口：5 小时剩余 **≤5%** 或
+  周剩余 **≤2%** 时跳过；所有实际存在的窗口均高于阈值时才恢复，缺失窗口不参与判断。
+  Node Router 在请求到来时刷新额度，默认缓存 30 秒；没有整机常驻定时器，悬浮窗也不参与额度决策。
+  同一请求至多尝试三家、每家一次，只有明确额度失败且尚未输出时才继续降级，SuperGPT 为终点。
+  查询失败时保留已有档位；首次无法可靠判断则明确报错，不凭网络、认证或普通限流错误猜测额度。
+  独立子代理不支持 `auto`，默认官方且继续遵循自己的开关；`codex-auto-review` 特殊模型继续使用官方。
+- “路由控制 → 子代理供应商”可独立选择 WLB / SuperGPT / GPT（官方），默认官方。
+  菜单调用 `gpt-route.mjs subagent wlb|supergpt|official`，同样要求 Router 已开启；
+  选择对所有任务后续已识别的原生 GPT 子代理请求生效。主代理和子代理分别勾选已确认的供应商，
+  用量标题高亮表示主代理路由。需要配套支持该命令的 Router；首次更新源码后重启 Router
+  和悬浮窗以加载新功能，之后切换供应商无需重启。
 - “开启路由”和“关闭路由”复用路由器的 `codex-router.ps1 enable|disable`，因此会
   同步调整 Codex 配置和后台服务；“重启路由器”只重启现有服务。
 - 程序启动后、关闭托盘菜单时及每 30 秒，会在后台调用 `node src/status.mjs --json`，

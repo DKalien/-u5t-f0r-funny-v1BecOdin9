@@ -99,7 +99,14 @@ class TestExitRuntime(unittest.TestCase):
             self.assertIsNotNone(router_menu)
             self.assertEqual(
                 [action.text() for action in router_menu.actions() if not action.isSeparator()],
-                ["切换到 WLB", "切换到 SuperGPT", "切换到 GPT", "开启路由", "关闭路由", "重启路由器"],
+                ["自动（WLB → GPT → SuperGPT）", "切换到 WLB", "切换到 SuperGPT", "切换到 GPT", "子代理供应商", "开启路由", "关闭路由", "重启路由器"],
+            )
+            subagent_menu = next(
+                action.menu() for action in router_menu.actions() if action.text() == "子代理供应商"
+            )
+            self.assertEqual(
+                [action.text() for action in subagent_menu.actions()],
+                ["切换子代理到 WLB", "切换子代理到 SuperGPT", "切换子代理到 GPT"],
             )
 
     def test_route_switch_actions_and_confirmed_selection(self):
@@ -126,6 +133,60 @@ class TestExitRuntime(unittest.TestCase):
             widget._on_router_operation_done(RouterResult(False, "切换失败"))
             self.assertIsNone(widget._gpt_route)
             self.assertFalse(any(action.isChecked() for action in widget._gpt_route_actions.values()))
+
+    def test_auto_selection_and_effective_highlight_are_independent(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            widget._tray_icon.showMessage = Mock()
+            widget._set_gpt_route("official")
+            with patch("widget.RouterWorker") as worker_type:
+                widget._start_router_operation("route-auto")
+                worker_type.assert_called_once_with("route-auto", widget)
+                self.assertTrue(widget._gpt_route_actions["official"].isChecked())
+                self.assertFalse(widget._gpt_route_actions["auto"].isChecked())
+                self.assertTrue(all(not action.isEnabled() for action in widget._router_actions))
+                widget._on_router_operation_done(RouterResult(True, "自动路由已启用", gpt_route="auto"))
+            self.assertTrue(widget._gpt_route_actions["auto"].isChecked())
+            self.assertIsNone(widget._effective_gpt_route)
+            self.assertNotIn("auto", widget._subagent_route_actions)
+            for effective in ("wlb", "official", "supergpt", None):
+                widget._on_router_status_done(RouterResult(
+                    True, "自动路由已开启", route_enabled=True, gpt_route="auto",
+                    subagent_route="official", gpt_effective_route=effective,
+                ))
+                self.assertEqual(widget._effective_gpt_route, effective)
+                self.assertTrue(widget._gpt_route_actions["auto"].isChecked())
+                self.assertTrue(widget._subagent_route_actions["official"].isChecked())
+                self.assertEqual(sum(action.isChecked() for action in widget._gpt_route_actions.values()), 1)
+            widget._on_router_operation_done(RouterResult(False, "切换失败"))
+            self.assertIsNone(widget._effective_gpt_route)
+            self.assertFalse(any(action.isChecked() for action in widget._gpt_route_actions.values()))
+
+    def test_subagent_route_switch_actions_and_confirmed_selection(self):
+        with managed_widget({"position": [100, 100]}) as widget:
+            widget._tray_icon.showMessage = Mock()
+            widget._set_subagent_route("official")
+            self.assertTrue(widget._subagent_route_actions["official"].isChecked())
+            with patch.object(widget, "_start_router_operation") as start:
+                widget._subagent_route_actions["wlb"].trigger()
+                start.assert_called_once_with("subagent-route-wlb")
+
+            widget._router_worker = Mock()
+            widget._on_router_operation_done(
+                RouterResult(
+                    True,
+                    "子代理供应商已切换到 WLB",
+                    route_enabled=True,
+                    subagent_route="wlb",
+                )
+            )
+            self.assertEqual(widget._subagent_route, "wlb")
+            self.assertTrue(widget._subagent_route_actions["wlb"].isChecked())
+            self.assertFalse(widget._subagent_route_actions["official"].isChecked())
+
+            widget._router_worker = Mock()
+            widget._on_router_operation_done(RouterResult(False, "切换失败"))
+            self.assertIsNone(widget._subagent_route)
+            self.assertFalse(any(action.isChecked() for action in widget._subagent_route_actions.values()))
 
     def test_router_status_updates_tray_menu(self):
         with managed_widget({"position": [100, 100]}) as widget:

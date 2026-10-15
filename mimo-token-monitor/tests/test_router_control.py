@@ -81,6 +81,48 @@ class TestRouterControl(unittest.TestCase):
                         self.assertIsNone(result.route_enabled)
                         self.assertIn("密钥未配置" if enabled else "先开启路由", result.detail)
 
+    def test_auto_status_keeps_configured_and_effective_routes_separate(self):
+        from router_control import _status_result
+        for effective in (None, "wlb", "official", "supergpt", "unknown"):
+            with self.subTest(effective=effective):
+                payload = {
+                    "config": {"mode": "router", "managed": True},
+                    "health": {"ok": True},
+                    "gptRoute": {"mode": "auto", "readable": True, "ready": True,
+                                 "effectiveMode": effective},
+                    "subagentRoute": {"mode": "official", "readable": True, "ready": True},
+                }
+                result = _status_result("检查", subprocess.CompletedProcess([], 0, json.dumps(payload)))
+                self.assertTrue(result.ok)
+                self.assertEqual(result.gpt_route, "auto")
+                self.assertEqual(result.gpt_effective_route, None if effective == "unknown" else effective)
+                self.assertEqual(result.subagent_route, "official")
+                self.assertEqual(result.message, "自动路由已开启")
+                payload["health"]["ok"] = False
+                result = _status_result("检查", subprocess.CompletedProcess([], 1, json.dumps(payload)))
+                self.assertIsNone(result.gpt_route)
+                self.assertIsNone(result.gpt_effective_route)
+
+    def test_auto_switch_uses_existing_cli_and_never_guesses_effective_route(self):
+        for healthy, success in ((True, True), (False, True), (True, False)):
+            with self.subTest(healthy=healthy, success=success), tempfile.TemporaryDirectory() as tmp:
+                root = make_router_root(Path(tmp))
+                status = {"config": {"mode": "router", "managed": True}, "health": {"ok": healthy}}
+                runner = Mock(side_effect=[
+                    subprocess.CompletedProcess([], 0, json.dumps(status)),
+                    subprocess.CompletedProcess([], 0 if success else 1, "", "自动模式不可用"),
+                ])
+                result = run_router_operation("route-auto", runner=runner, environ={ROUTER_ROOT_ENV: str(root)})
+                self.assertEqual(result.ok, healthy and success)
+                self.assertEqual(runner.call_count, 2 if healthy else 1)
+                if healthy:
+                    self.assertEqual(runner.call_args_list[1].args[0],
+                                     ["node", str(root / "src" / "gpt-route.mjs"), "auto"])
+                self.assertEqual(result.gpt_route, "auto" if result.ok else None)
+                self.assertIsNone(result.gpt_effective_route)
+                if result.ok:
+                    self.assertEqual(result.message, "GPT 自动路由已启用")
+
     def test_resolve_root_from_install_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -201,6 +243,11 @@ class TestRouterControl(unittest.TestCase):
                                 "readable": True,
                                 "ready": True,
                             },
+                            "subagentRoute": {
+                                "mode": "supergpt",
+                                "readable": True,
+                                "ready": True,
+                            },
                         }
                     ).encode(),
                     b"",
@@ -216,9 +263,40 @@ class TestRouterControl(unittest.TestCase):
             self.assertTrue(result.ok)
             self.assertTrue(result.route_enabled)
             self.assertEqual(result.gpt_route, "wlb")
+            self.assertEqual(result.subagent_route, "supergpt")
             self.assertEqual(
                 calls,
                 [["node", str(root / "src" / "status.mjs"), "--json"]],
+            )
+
+    def test_subagent_route_switch_uses_independent_cli_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_router_root(Path(tmp))
+            precheck = subprocess.CompletedProcess(
+                [],
+                0,
+                json.dumps({
+                    "config": {"mode": "router", "managed": True},
+                    "health": {"ok": True},
+                }).encode(),
+                b"",
+            )
+            calls = []
+
+            def runner(command, **_kwargs):
+                calls.append(command)
+                return precheck if len(calls) == 1 else subprocess.CompletedProcess(command, 0, b"", b"")
+
+            with patch("router_control.hidden_subprocess_kwargs", return_value={}):
+                result = run_router_operation(
+                    "subagent-route-wlb", runner=runner, environ={ROUTER_ROOT_ENV: str(root)}
+                )
+
+            self.assertTrue(result.ok)
+            self.assertEqual(result.subagent_route, "wlb")
+            self.assertIsNone(result.gpt_route)
+            self.assertEqual(
+                calls[1], ["node", str(root / "src" / "gpt-route.mjs"), "subagent", "wlb"]
             )
 
     def test_status_exit_one_keeps_native_official_route(self):

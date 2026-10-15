@@ -473,6 +473,8 @@ class TokenWidget(QWidget):
         self._queued_router_operation: str | None = None
         self._router_actions: list[QAction] = []
         self._gpt_route: str | None = None
+        self._effective_gpt_route: str | None = None
+        self._subagent_route: str | None = None
         self._router_poll_timer = QTimer(self)
         self._router_poll_timer.timeout.connect(self._refresh_router_state)
         self._playwright_worker: PlaywrightCookieWorker | None = None
@@ -737,18 +739,34 @@ class TokenWidget(QWidget):
         self._router_menu_action = router_menu.menuAction()
         self._gpt_route_actions = {}
         for route, title in (
+            ("auto", "自动（WLB → GPT → SuperGPT）"),
             ("wlb", "切换到 WLB"),
             ("supergpt", "切换到 SuperGPT"),
             ("official", "切换到 GPT"),
         ):
             action = router_menu.addAction(title)
             action.setCheckable(True)
-            action.setToolTip("全局切换：影响后续原生 GPT 请求；已识别 GPT 子代理固定走官方")
+            action.setToolTip("全局切换：影响后续非子代理的原生 GPT 请求；子代理供应商请使用下方菜单")
             operation = f"route-{route}"
             action.triggered.connect(
                 lambda _checked=False, operation=operation: self._start_router_operation(operation)
             )
             self._gpt_route_actions[route] = action
+        subagent_menu = router_menu.addMenu("子代理供应商")
+        self._subagent_route_actions = {}
+        for route, title in (
+            ("wlb", "切换子代理到 WLB"),
+            ("supergpt", "切换子代理到 SuperGPT"),
+            ("official", "切换子代理到 GPT"),
+        ):
+            action = subagent_menu.addAction(title)
+            action.setCheckable(True)
+            action.setToolTip("仅影响已识别的原生 GPT 子代理；主代理路由保持不变")
+            operation = f"subagent-route-{route}"
+            action.triggered.connect(
+                lambda _checked=False, operation=operation: self._start_router_operation(operation)
+            )
+            self._subagent_route_actions[route] = action
         router_menu.addSeparator()
         enable_act = router_menu.addAction("开启路由")
         enable_act.triggered.connect(
@@ -766,6 +784,7 @@ class TokenWidget(QWidget):
         self._router_actions = [
             enable_act, disable_act, restart_act,
             *self._gpt_route_actions.values(),
+            *self._subagent_route_actions.values(),
         ]
         tray_menu.aboutToHide.connect(
             lambda: QTimer.singleShot(0, self._refresh_router_state)
@@ -798,12 +817,23 @@ class TokenWidget(QWidget):
         state = "状态未知" if enabled is None else "已开启" if enabled else "已关闭"
         self._router_menu_action.setText(f"路由控制（{state}）")
 
-    def _set_gpt_route(self, route: str | None):
-        previous = self._gpt_route
-        self._gpt_route = route if route in {"official", "wlb", "supergpt"} else None
+    def _set_gpt_route(self, route: str | None, effective_route: str | None = None):
+        previous = self._effective_gpt_route
+        self._gpt_route = route if route in {"official", "wlb", "supergpt", "auto"} else None
+        self._effective_gpt_route = (
+            effective_route if effective_route in {"official", "wlb", "supergpt"} else None
+        ) if self._gpt_route == "auto" else self._gpt_route
         for name, action in self._gpt_route_actions.items():
             action.setChecked(name == self._gpt_route)
-        if previous != self._gpt_route:
+        if previous != self._effective_gpt_route:
+            self.update()
+
+    def _set_subagent_route(self, route: str | None):
+        previous = self._subagent_route
+        self._subagent_route = route if route in {"official", "wlb", "supergpt"} else None
+        for name, action in self._subagent_route_actions.items():
+            action.setChecked(name == self._subagent_route)
+        if previous != self._subagent_route:
             self.update()
 
     def _refresh_router_state(self):
@@ -829,7 +859,11 @@ class TokenWidget(QWidget):
     def _on_router_status_done(self, result: router_control.RouterResult):
         self._finish_router_worker()
         self._set_router_state(result.route_enabled if result.ok else None)
-        self._set_gpt_route(result.gpt_route if result.ok else None)
+        self._set_gpt_route(
+            result.gpt_route if result.ok else None,
+            result.gpt_effective_route if result.ok else None,
+        )
+        self._set_subagent_route(result.subagent_route if result.ok else None)
         if self._queued_router_operation is not None:
             operation = self._queued_router_operation
             self._queued_router_operation = None
@@ -856,7 +890,8 @@ class TokenWidget(QWidget):
         if self._exit_requested:
             return
         # QAction 点击会自动勾选；只展示已确认成功的实际路由。
-        self._set_gpt_route(self._gpt_route)
+        self._set_gpt_route(self._gpt_route, self._effective_gpt_route)
+        self._set_subagent_route(self._subagent_route)
         if self._router_worker is not None:
             # 后台轮询不应吞掉菜单点击；检查结束后串行执行这次操作。
             if self._router_worker.operation == "status":
@@ -877,9 +912,13 @@ class TokenWidget(QWidget):
             "enable": "正在开启路由...",
             "disable": "正在关闭路由...",
             "restart": "正在重启路由器...",
+            "route-auto": "正在启用自动路由...",
             "route-wlb": "正在切换到 WLB...",
             "route-supergpt": "正在切换到 SuperGPT...",
             "route-official": "正在切换到 GPT...",
+            "subagent-route-wlb": "正在切换子代理到 WLB...",
+            "subagent-route-supergpt": "正在切换子代理到 SuperGPT...",
+            "subagent-route-official": "正在切换子代理到 GPT...",
         }
         for action in self._router_actions:
             action.setEnabled(False)
@@ -902,7 +941,11 @@ class TokenWidget(QWidget):
             self._set_router_state(result.route_enabled)
         elif not result.ok:
             self._set_router_state(None)
-        self._set_gpt_route(result.gpt_route if result.ok else None)
+        self._set_gpt_route(
+            result.gpt_route if result.ok else None,
+            result.gpt_effective_route if result.ok else None,
+        )
+        self._set_subagent_route(result.subagent_route if result.ok else None)
 
         summary = result.message or ("路由操作成功" if result.ok else "路由操作失败")
         self._set_router_status(summary, result.ok, clear_after=5000)
@@ -933,7 +976,7 @@ class TokenWidget(QWidget):
         p.setFont(font_title)
         title_text = "总览" if display_mode == OVERVIEW_MODE else ("MiMo Token" if display_mode == MIMO_MODE else "WLB")
         p.setPen(QPen(
-            ACCENT_GREEN if display_mode == THIRD_PARTY_MODE and self._gpt_route == "wlb"
+            ACCENT_GREEN if display_mode == THIRD_PARTY_MODE and self._effective_gpt_route == "wlb"
             else TEXT_COLOR
         ))
         p.drawText(16, 22, title_text)
@@ -1348,7 +1391,7 @@ class TokenWidget(QWidget):
                     configured,
                 )
                 active_route = "wlb" if idx == 1 else "official"
-                p.setPen(QPen(ACCENT_GREEN if self._gpt_route == active_route else TEXT_COLOR))
+                p.setPen(QPen(ACCENT_GREEN if self._effective_gpt_route == active_route else TEXT_COLOR))
                 segment_width = (bar_w - DUAL_BAR_GAP) // 2
                 labels = (
                     (cell_x, primary_title, primary_center_text, primary_text),
@@ -1473,7 +1516,7 @@ class TokenWidget(QWidget):
         value_x = x + label_width + 4
         value_width = max(0, width - label_width - 4)
         p.setFont(font)
-        p.setPen(QPen(ACCENT_GREEN if self._gpt_route == "supergpt" else TEXT_COLOR))
+        p.setPen(QPen(ACCENT_GREEN if self._effective_gpt_route == "supergpt" else TEXT_COLOR))
         p.drawText(QRect(x, label_y - 14, label_width, 18), Qt.AlignmentFlag.AlignVCenter, title)
         p.setPen(QPen(DIM if self._supergpt_balance is None else TEXT_COLOR))
         p.drawText(QRect(value_x, label_y - 14, value_width, 18),
