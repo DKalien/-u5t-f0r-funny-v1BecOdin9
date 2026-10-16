@@ -956,6 +956,43 @@ class TestOverviewTooltipLines(unittest.TestCase):
         self.assertIn("WLB \u5468\u9650\u989d剩余: \u672a\u914d\u7f6e", joined)
         w.close()
 
+    def test_bottom_error_includes_provider_name(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            for attr, label in (("_mimo_error", "MiMo"), ("_tp_error", "WLB"),
+                                ("_gpt_error", "GPT"), ("_supergpt_error", "SuperGPT")):
+                w._mimo_error = w._tp_error = w._gpt_error = w._supergpt_error = ""
+                setattr(w, attr, "HTTP 403")
+                w._refresh_error_state()
+                self.assertEqual(w._last_error, f"{label}: HTTP 403")
+            w._mimo_error = w._tp_error = w._gpt_error = w._supergpt_error = ""
+            w._refresh_error_state()
+            self.assertEqual(w._last_error, "")
+        finally:
+            w.close()
+
+    def test_bottom_error_isolated_by_detail_mode(self):
+        w = _make_widget(display_mode=MIMO_MODE)
+        try:
+            w._mimo_error, w._tp_error = "HTTP 403", "WLB down"
+            w._refresh_error_state()
+            self.assertEqual(w._last_error, "MiMo: HTTP 403")
+            w.cfg["display_mode"] = THIRD_PARTY_MODE
+            w._refresh_error_state()
+            self.assertEqual(w._last_error, "WLB: WLB down")
+        finally:
+            w.close()
+
+    def test_supergpt_callback_updates_and_clears_bottom_error(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            w._on_supergpt_balance_done({"ok": False, "error": "HTTP 403"})
+            self.assertEqual(w._last_error, "SuperGPT: HTTP 403")
+            w._on_supergpt_balance_done({"ok": True, "balance": 12, "currency": "USD"})
+            self.assertEqual(w._last_error, "")
+        finally:
+            w.close()
+
     def test_mimo_configured_no_data(self):
         w = _make_widget(cookie="fake")
         w._plan_total = 0

@@ -692,14 +692,23 @@ class TokenWidget(QWidget):
         return lines
 
     def _refresh_error_state(self):
-        """Expose the error for the active page without losing either source error."""
+        """按当前页面显示对应供应商错误，同时保留各来源原始错误。"""
         display_mode = self.cfg.get("display_mode", MIMO_MODE)
         if display_mode == MIMO_MODE:
-            self._last_error = self._mimo_error
+            self._last_error = f"MiMo: {self._mimo_error}" if self._mimo_error else ""
         elif display_mode == THIRD_PARTY_MODE:
-            self._last_error = self._tp_error
+            self._last_error = f"WLB: {self._tp_error}" if self._tp_error else ""
         else:
-            self._last_error = self._mimo_error or self._tp_error or self._gpt_error
+            errors = (
+                ("MiMo", self._mimo_error),
+                ("WLB", self._tp_error),
+                ("GPT", self._gpt_error),
+                ("SuperGPT", self._supergpt_error),
+            )
+            self._last_error = next(
+                (f"{name}: {error}" for name, error in errors if error),
+                "",
+            )
 
     def _setup_tray(self):
         """Initialize system tray icon and menu."""
@@ -1643,6 +1652,7 @@ class TokenWidget(QWidget):
             self._supergpt_last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         else:
             self._supergpt_error = result.get("error") or "余额查询失败"
+        self._refresh_error_state()
         self._apply_overview_tooltip_if_needed()
         self.update()
 
