@@ -25,6 +25,7 @@ class RouterResult:
     gpt_route: str | None = None
     subagent_route: str | None = None
     gpt_effective_route: str | None = None
+    subagent_effective_route: str | None = None
 
 
 def resolve_router_root(environ: Mapping[str, str] | None = None) -> Path:
@@ -67,6 +68,7 @@ def _commands(operation: str, root: Path) -> list[list[str]]:
     if operation in {
         "route-wlb", "route-official", "route-supergpt", "route-auto",
         "subagent-route-wlb", "subagent-route-official", "subagent-route-supergpt",
+        "subagent-route-auto",
     }:
         is_subagent = operation.startswith("subagent-")
         route_operation = operation.removeprefix("subagent-") if is_subagent else operation
@@ -155,7 +157,7 @@ def _status_result(label: str, result: subprocess.CompletedProcess) -> RouterRes
         actual_route = gpt_route["mode"]
         if (
             isinstance(subagent_route, dict)
-            and subagent_route.get("mode") in {"official", "wlb", "supergpt"}
+            and subagent_route.get("mode") in {"official", "wlb", "supergpt", "auto"}
             and subagent_route.get("readable") is True
             and subagent_route.get("ready") is True
         ):
@@ -165,6 +167,10 @@ def _status_result(label: str, result: subprocess.CompletedProcess) -> RouterRes
     if actual_route == "auto":
         candidate = gpt_route.get("effectiveMode")
         effective_route = candidate if candidate in {"official", "wlb", "supergpt"} else None
+    subagent_effective_route = actual_subagent_route
+    if actual_subagent_route == "auto":
+        candidate = subagent_route.get("effectiveMode") if isinstance(subagent_route, dict) else None
+        subagent_effective_route = candidate if candidate in {"official", "supergpt"} else None
 
     if mode == "native":
         message = "官方直连"
@@ -183,6 +189,7 @@ def _status_result(label: str, result: subprocess.CompletedProcess) -> RouterRes
         gpt_route=actual_route,
         subagent_route=actual_subagent_route,
         gpt_effective_route=effective_route,
+        subagent_effective_route=subagent_effective_route,
     )
 
 
@@ -226,6 +233,7 @@ def run_router_operation(
         "subagent-route-wlb": "切换子代理供应商",
         "subagent-route-official": "切换子代理供应商",
         "subagent-route-supergpt": "切换子代理供应商",
+        "subagent-route-auto": "启用子代理自动路由",
     }
     label = labels.get(operation, "路由操作")
     try:
@@ -238,6 +246,7 @@ def run_router_operation(
     route_operations = {
         "route-wlb", "route-official", "route-supergpt", "route-auto",
         "subagent-route-wlb", "subagent-route-official", "subagent-route-supergpt",
+        "subagent-route-auto",
     }
     for index, command in enumerate(commands):
         try:
@@ -281,6 +290,7 @@ def run_router_operation(
         "subagent-route-wlb": "子代理供应商已切换到 WLB",
         "subagent-route-official": "子代理供应商已切换到官方",
         "subagent-route-supergpt": "子代理供应商已切换到 SuperGPT",
+        "subagent-route-auto": "子代理自动路由已启用",
     }
     target_route = {
         "route-wlb": "wlb",
@@ -292,6 +302,7 @@ def run_router_operation(
         "subagent-route-wlb": "wlb",
         "subagent-route-official": "official",
         "subagent-route-supergpt": "supergpt",
+        "subagent-route-auto": "auto",
     }.get(operation)
     return RouterResult(
         True,
@@ -306,7 +317,12 @@ def run_router_operation(
             "subagent-route-wlb": True,
             "subagent-route-official": True,
             "subagent-route-supergpt": True,
+            "subagent-route-auto": True,
         }.get(operation),
         gpt_route=target_route,
         subagent_route=target_subagent_route,
+        # 与 _status_result 语义一致：手动模式有效路由即目标路由；auto 切换瞬间尚未判定，不猜测。
+        subagent_effective_route=(
+            target_subagent_route if target_subagent_route != "auto" else None
+        ),
     )

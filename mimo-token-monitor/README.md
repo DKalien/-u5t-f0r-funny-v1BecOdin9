@@ -141,7 +141,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   - 双击托盘图标：恢复显示悬浮窗
   - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / Playwright 续期 /
     路由控制 / 重启悬浮窗 / 退出
-  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；主代理可选择自动（WLB → GPT → SuperGPT）或切换到 WLB / SuperGPT / GPT，子代理可在独立子菜单中切换供应商，也可开启、关闭或重启 Codex Router
+  - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；主代理可选择自动（WLB → GPT → SuperGPT）或切换到 WLB / SuperGPT / GPT，子代理可选择自动（GPT → SuperGPT）或手动切换供应商，也可开启、关闭或重启 Codex Router
   - 重启悬浮窗：退出当前进程并释放单实例锁后启动新实例
   - 悬停托盘图标：显示用量概览
 
@@ -165,9 +165,9 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
   Node Router 在请求到来时刷新额度，默认缓存 30 秒；没有整机常驻定时器，悬浮窗也不参与额度决策。
   同一请求至多尝试三家、每家一次，只有明确额度失败且尚未输出时才继续降级，SuperGPT 为终点。
   查询失败时保留已有档位；首次无法可靠判断则明确报错，不凭网络、认证或普通限流错误猜测额度。
-  独立子代理不支持 `auto`，默认官方且继续遵循自己的开关；`codex-auto-review` 特殊模型继续使用官方。
+  子代理 auto 按官方 GPT → SuperGPT 自动切换，阈值与主代理一致；WLB 不进入子代理自动循环。`codex-auto-review` 特殊模型继续使用官方。
 - “路由控制 → 子代理供应商”可独立选择 WLB / SuperGPT / GPT（官方），默认官方。
-  菜单调用 `gpt-route.mjs subagent wlb|supergpt|official`，同样要求 Router 已开启；
+  菜单调用 `gpt-route.mjs subagent auto|wlb|supergpt|official`，同样要求 Router 已开启；
   选择对所有任务后续已识别的原生 GPT 子代理请求生效。主代理和子代理分别勾选已确认的供应商，
   用量标题高亮表示主代理路由。需要配套支持该命令的 Router；首次更新源码后重启 Router
   和悬浮窗以加载新功能，之后切换供应商无需重启。

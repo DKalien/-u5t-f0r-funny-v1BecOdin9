@@ -106,7 +106,7 @@ class TestExitRuntime(unittest.TestCase):
             )
             self.assertEqual(
                 [action.text() for action in subagent_menu.actions()],
-                ["切换子代理到 WLB", "切换子代理到 SuperGPT", "切换子代理到 GPT"],
+                ["自动（GPT → SuperGPT）", "切换子代理到 WLB", "切换子代理到 SuperGPT", "切换子代理到 GPT"],
             )
 
     def test_route_switch_actions_and_confirmed_selection(self):
@@ -147,7 +147,7 @@ class TestExitRuntime(unittest.TestCase):
                 widget._on_router_operation_done(RouterResult(True, "自动路由已启用", gpt_route="auto"))
             self.assertTrue(widget._gpt_route_actions["auto"].isChecked())
             self.assertIsNone(widget._effective_gpt_route)
-            self.assertNotIn("auto", widget._subagent_route_actions)
+            self.assertIn("auto", widget._subagent_route_actions)
             for effective in ("wlb", "official", "supergpt", None):
                 widget._on_router_status_done(RouterResult(
                     True, "自动路由已开启", route_enabled=True, gpt_route="auto",
@@ -169,6 +169,9 @@ class TestExitRuntime(unittest.TestCase):
             with patch.object(widget, "_start_router_operation") as start:
                 widget._subagent_route_actions["wlb"].trigger()
                 start.assert_called_once_with("subagent-route-wlb")
+                start.reset_mock()
+                widget._subagent_route_actions["auto"].trigger()
+                start.assert_called_once_with("subagent-route-auto")
 
             widget._router_worker = Mock()
             widget._on_router_operation_done(
@@ -182,6 +185,17 @@ class TestExitRuntime(unittest.TestCase):
             self.assertEqual(widget._subagent_route, "wlb")
             self.assertTrue(widget._subagent_route_actions["wlb"].isChecked())
             self.assertFalse(widget._subagent_route_actions["official"].isChecked())
+
+            widget._router_worker = Mock()
+            widget._on_router_status_done(RouterResult(
+                True,
+                "子代理自动路由已开启",
+                route_enabled=True,
+                subagent_route="auto",
+                subagent_effective_route="supergpt",
+            ))
+            self.assertEqual(widget._effective_subagent_route, "supergpt")
+            self.assertTrue(widget._subagent_route_actions["auto"].isChecked())
 
             widget._router_worker = Mock()
             widget._on_router_operation_done(RouterResult(False, "切换失败"))

@@ -269,6 +269,46 @@ class TestRouterControl(unittest.TestCase):
                 [["node", str(root / "src" / "status.mjs"), "--json"]],
             )
 
+    def test_subagent_auto_status_and_switch_use_two_stage_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_router_root(Path(tmp))
+            payload = {
+                "config": {"mode": "router", "managed": True},
+                "health": {"ok": True},
+                "gptRoute": {"mode": "official", "readable": True, "ready": True},
+                "subagentRoute": {
+                    "mode": "auto",
+                    "readable": True,
+                    "ready": True,
+                    "effectiveMode": "supergpt",
+                },
+            }
+            calls = []
+
+            def runner(command, **_kwargs):
+                calls.append(command)
+                if command[-1:] == ["--json"]:
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload).encode(), b"")
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            with patch("router_control.hidden_subprocess_kwargs", return_value={}):
+                status = run_router_operation("status", runner=runner, environ={ROUTER_ROOT_ENV: str(root)})
+                switched = run_router_operation(
+                    "subagent-route-auto", runner=runner, environ={ROUTER_ROOT_ENV: str(root)}
+                )
+
+            self.assertTrue(status.ok)
+            self.assertEqual(status.subagent_route, "auto")
+            self.assertEqual(status.subagent_effective_route, "supergpt")
+            self.assertTrue(switched.ok)
+            # auto 切换瞬间尚未判定有效档位，不猜测。
+            self.assertEqual(switched.subagent_route, "auto")
+            self.assertIsNone(switched.subagent_effective_route)
+            self.assertEqual(
+                calls[-1],
+                ["node", str(root / "src" / "gpt-route.mjs"), "subagent", "auto"],
+            )
+
     def test_subagent_route_switch_uses_independent_cli_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_router_root(Path(tmp))
@@ -294,6 +334,8 @@ class TestRouterControl(unittest.TestCase):
 
             self.assertTrue(result.ok)
             self.assertEqual(result.subagent_route, "wlb")
+            # 手动模式有效路由即目标路由，操作完成瞬间即可判定。
+            self.assertEqual(result.subagent_effective_route, "wlb")
             self.assertIsNone(result.gpt_route)
             self.assertEqual(
                 calls[1], ["node", str(root / "src" / "gpt-route.mjs"), "subagent", "wlb"]

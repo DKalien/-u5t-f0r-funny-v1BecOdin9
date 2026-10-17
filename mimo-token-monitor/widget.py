@@ -475,6 +475,7 @@ class TokenWidget(QWidget):
         self._gpt_route: str | None = None
         self._effective_gpt_route: str | None = None
         self._subagent_route: str | None = None
+        self._effective_subagent_route: str | None = None
         self._router_poll_timer = QTimer(self)
         self._router_poll_timer.timeout.connect(self._refresh_router_state)
         self._playwright_worker: PlaywrightCookieWorker | None = None
@@ -764,6 +765,7 @@ class TokenWidget(QWidget):
         subagent_menu = router_menu.addMenu("子代理供应商")
         self._subagent_route_actions = {}
         for route, title in (
+            ("auto", "自动（GPT → SuperGPT）"),
             ("wlb", "切换子代理到 WLB"),
             ("supergpt", "切换子代理到 SuperGPT"),
             ("official", "切换子代理到 GPT"),
@@ -837,12 +839,15 @@ class TokenWidget(QWidget):
         if previous != self._effective_gpt_route:
             self.update()
 
-    def _set_subagent_route(self, route: str | None):
-        previous = self._subagent_route
-        self._subagent_route = route if route in {"official", "wlb", "supergpt"} else None
+    def _set_subagent_route(self, route: str | None, effective_route: str | None = None):
+        previous = self._effective_subagent_route
+        self._subagent_route = route if route in {"official", "wlb", "supergpt", "auto"} else None
+        self._effective_subagent_route = (
+            effective_route if effective_route in {"official", "supergpt"} else None
+        ) if self._subagent_route == "auto" else self._subagent_route
         for name, action in self._subagent_route_actions.items():
             action.setChecked(name == self._subagent_route)
-        if previous != self._subagent_route:
+        if previous != self._effective_subagent_route:
             self.update()
 
     def _refresh_router_state(self):
@@ -872,7 +877,10 @@ class TokenWidget(QWidget):
             result.gpt_route if result.ok else None,
             result.gpt_effective_route if result.ok else None,
         )
-        self._set_subagent_route(result.subagent_route if result.ok else None)
+        self._set_subagent_route(
+            result.subagent_route if result.ok else None,
+            result.subagent_effective_route if result.ok else None,
+        )
         if self._queued_router_operation is not None:
             operation = self._queued_router_operation
             self._queued_router_operation = None
@@ -928,6 +936,7 @@ class TokenWidget(QWidget):
             "subagent-route-wlb": "正在切换子代理到 WLB...",
             "subagent-route-supergpt": "正在切换子代理到 SuperGPT...",
             "subagent-route-official": "正在切换子代理到 GPT...",
+            "subagent-route-auto": "正在启用子代理自动路由...",
         }
         for action in self._router_actions:
             action.setEnabled(False)
@@ -954,7 +963,10 @@ class TokenWidget(QWidget):
             result.gpt_route if result.ok else None,
             result.gpt_effective_route if result.ok else None,
         )
-        self._set_subagent_route(result.subagent_route if result.ok else None)
+        self._set_subagent_route(
+            result.subagent_route if result.ok else None,
+            result.subagent_effective_route if result.ok else None,
+        )
 
         summary = result.message or ("路由操作成功" if result.ok else "路由操作失败")
         self._set_router_status(summary, result.ok, clear_after=5000)
