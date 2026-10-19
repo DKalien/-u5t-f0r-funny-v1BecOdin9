@@ -3,14 +3,24 @@ from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QAction, QFont, QFontMet
 from PyQt6.QtWidgets import (
     QWidget, QMenu, QDialog, QFormLayout,
     QLineEdit, QSpinBox, QDoubleSpinBox, QPushButton,
-    QCheckBox, QHBoxLayout, QLabel, QMessageBox, QApplication, QSystemTrayIcon,
+    QCheckBox, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox,
+    QApplication, QSystemTrayIcon, QComboBox, QDialogButtonBox,
 )
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 import json
 import math
 import os
 import sys
 import api_client
+from claude_profiles import (
+    ClaudeProfileError,
+    PROFILE_ENV_KEYS,
+    apply_profile,
+    current_profile_name,
+    load_profiles,
+    save_profiles,
+)
 from config import save_config
 import cookie_reader
 import playwright_session
@@ -443,6 +453,181 @@ class SettingsDialog(QDialog):
         return self.cfg
 
 
+class ClaudeProfilesDialog(QDialog):
+    """Edit Claude profile templates without editing JSON by hand."""
+
+    _FIELD_LABELS = {
+        "ANTHROPIC_AUTH_TOKEN": "Auth Token:",
+        "ANTHROPIC_BASE_URL": "Base URL:",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "Fable Model:",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "Opus Model:",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "Sonnet Model:",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "Haiku Model:",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "Subagent Model:",
+    }
+
+    def __init__(self, profiles: list[dict], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Claude 配置模板")
+        self.setMinimumSize(650, 470)
+        self.resize(700, 520)
+        self._profiles = deepcopy(profiles)
+        self._current_index = -1
+
+        root_layout = QVBoxLayout(self)
+        intro = QLabel(
+            "在这里填写配置模板。保存只更新模板文件，不会立即切换当前 Claude 配置；\n"
+            "请在托盘的“切换 Claude 配置”菜单中选择要使用的配置。"
+        )
+        intro.setWordWrap(True)
+        root_layout.addWidget(intro)
+
+        profile_row = QHBoxLayout()
+        profile_row.addWidget(QLabel("配置名称:"))
+        self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumWidth(260)
+        profile_row.addWidget(self.profile_combo, 1)
+        new_button = QPushButton("新增")
+        new_button.clicked.connect(self._add_profile)
+        profile_row.addWidget(new_button)
+        self.delete_button = QPushButton("删除")
+        self.delete_button.clicked.connect(self._delete_profile)
+        profile_row.addWidget(self.delete_button)
+        root_layout.addLayout(profile_row)
+
+        form = QFormLayout()
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("例如 API-GPT 或 Mimo")
+        form.addRow("显示名称:", self.name_edit)
+
+        self._env_edits: dict[str, QLineEdit] = {}
+        for key in PROFILE_ENV_KEYS:
+            edit = QLineEdit()
+            edit.setClearButtonEnabled(True)
+            if key == "ANTHROPIC_AUTH_TOKEN":
+                edit.setEchoMode(QLineEdit.EchoMode.Password)
+                edit.setPlaceholderText("填写 Auth Token")
+                show_token = QCheckBox("显示")
+                show_token.toggled.connect(
+                    lambda checked, edit=edit: edit.setEchoMode(
+                        QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+                    )
+                )
+                token_row = QHBoxLayout()
+                token_row.addWidget(edit)
+                token_row.addWidget(show_token)
+                field = token_row
+            elif key == "ANTHROPIC_BASE_URL":
+                edit.setPlaceholderText("例如 https://api.example.com")
+                field = edit
+            else:
+                edit.setPlaceholderText("填写模型名称")
+                field = edit
+            self._env_edits[key] = edit
+            form.addRow(self._FIELD_LABELS[key], field)
+        root_layout.addLayout(form)
+
+        token_hint = QLabel("Auth Token 默认隐藏，可直接粘贴；其余 settings.json 内容不会被修改。")
+        token_hint.setStyleSheet("color: gray; font-size: 11px;")
+        root_layout.addWidget(token_hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        root_layout.addWidget(buttons)
+
+        self.profile_combo.currentIndexChanged.connect(self._profile_selection_changed)
+        for profile in self._profiles:
+            self.profile_combo.addItem(str(profile.get("name", "")))
+        if self._profiles:
+            self.profile_combo.setCurrentIndex(0)
+        else:
+            self._add_profile()
+
+    def _collect_current(self) -> None:
+        if not 0 <= self._current_index < len(self._profiles):
+            return
+        profile = self._profiles[self._current_index]
+        profile["name"] = self.name_edit.text().strip()
+        profile["env"] = {
+            key: edit.text() for key, edit in self._env_edits.items()
+        }
+        self.profile_combo.setItemText(self._current_index, profile["name"])
+
+    def _load_profile(self, index: int) -> None:
+        if not 0 <= index < len(self._profiles):
+            self.name_edit.clear()
+            for edit in self._env_edits.values():
+                edit.clear()
+            self.delete_button.setEnabled(False)
+            return
+
+        profile = self._profiles[index]
+        self.name_edit.setText(str(profile.get("name", "")))
+        env = profile.get("env", {})
+        for key, edit in self._env_edits.items():
+            edit.setText(str(env.get(key, "")))
+        self.delete_button.setEnabled(len(self._profiles) > 1)
+
+    def _profile_selection_changed(self, index: int) -> None:
+        self._collect_current()
+        self._current_index = index
+        self._load_profile(index)
+
+    def _add_profile(self) -> None:
+        self._collect_current()
+        existing_names = {str(profile.get("name", "")) for profile in self._profiles}
+        base_name = "新配置"
+        name = base_name
+        suffix = 2
+        while name in existing_names:
+            name = f"{base_name}{suffix}"
+            suffix += 1
+        profile = {
+            "name": name,
+            "env": {key: "" for key in PROFILE_ENV_KEYS},
+        }
+        self._profiles.append(profile)
+        self.profile_combo.addItem(name)
+        self.profile_combo.setCurrentIndex(len(self._profiles) - 1)
+
+    def _delete_profile(self) -> None:
+        if len(self._profiles) <= 1 or not 0 <= self._current_index < len(self._profiles):
+            return
+        answer = QMessageBox.question(
+            self,
+            "删除配置",
+            f"确定删除配置“{self._profiles[self._current_index].get('name', '')}”吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        index = self._current_index
+        self._profiles.pop(index)
+        new_index = min(index, len(self._profiles) - 1)
+        self.profile_combo.blockSignals(True)
+        try:
+            self.profile_combo.removeItem(index)
+            self.profile_combo.setCurrentIndex(new_index)
+        finally:
+            self.profile_combo.blockSignals(False)
+        self._current_index = new_index
+        self._load_profile(new_index)
+
+    def _save(self) -> None:
+        self._collect_current()
+        try:
+            save_profiles(self._profiles)
+        except ClaudeProfileError as exc:
+            QMessageBox.warning(self, "保存失败", str(exc))
+            return
+        self.accept()
+
+
 # ── Main widget ─────────────────────────────────────────────────
 class TokenWidget(QWidget):
     def __init__(self, cfg: dict, exit_callback=None):
@@ -472,6 +657,10 @@ class TokenWidget(QWidget):
         self._router_worker: RouterWorker | None = None
         self._queued_router_operation: str | None = None
         self._router_actions: list[QAction] = []
+        self._claude_profiles: list[dict] = []
+        self._claude_profile_actions: dict[str, QAction] = {}
+        self._claude_profile_menu: QMenu | None = None
+        self._claude_profile_menu_action: QAction | None = None
         self._gpt_route: str | None = None
         self._effective_gpt_route: str | None = None
         self._subagent_route: str | None = None
@@ -743,6 +932,8 @@ class TokenWidget(QWidget):
         )
         tray_menu.addAction(renew_act)
 
+        self._setup_claude_profile_menu(tray_menu)
+
         tray_menu.addSeparator()
 
         router_menu = tray_menu.addMenu("路由控制（状态未知）")
@@ -823,6 +1014,104 @@ class TokenWidget(QWidget):
         if QSystemTrayIcon.isSystemTrayAvailable():
             self._refresh_router_state()
             self._router_poll_timer.start(30_000)
+
+    def _setup_claude_profile_menu(self, tray_menu: QMenu) -> None:
+        """Add a tray submenu for switching Claude Code environment templates."""
+        profile_menu = tray_menu.addMenu("切换 Claude 配置")
+        self._claude_profile_menu = profile_menu
+        self._claude_profile_menu_action = profile_menu.menuAction()
+        profile_menu.aboutToShow.connect(self._reload_claude_profile_menu)
+        self._reload_claude_profile_menu()
+
+    def _reload_claude_profile_menu(self) -> None:
+        """Reload templates so hand-edited additions work without restarting."""
+        profile_menu = self._claude_profile_menu
+        if profile_menu is None:
+            return
+
+        profile_menu.clear()
+        self._claude_profiles = []
+        self._claude_profile_actions.clear()
+
+        edit_action = profile_menu.addAction("编辑配置…")
+        edit_action.triggered.connect(self._open_claude_profiles_dialog)
+        profile_menu.addSeparator()
+        try:
+            self._claude_profiles = load_profiles()
+            active_name = current_profile_name(self._claude_profiles)
+        except ClaudeProfileError as exc:
+            if self._claude_profile_menu_action is not None:
+                self._claude_profile_menu_action.setToolTip(str(exc))
+            error_action = profile_menu.addAction("配置不可用")
+            error_action.setEnabled(False)
+            return
+
+        if self._claude_profile_menu_action is not None:
+            self._claude_profile_menu_action.setToolTip(
+                "从 claude_profiles.json 读取；只替换 Claude settings.json 的 env 配置参数"
+            )
+        for profile in self._claude_profiles:
+            name = profile["name"]
+            action = profile_menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(name == active_name)
+            action.setToolTip("只替换 Claude settings.json 的 env 配置参数")
+            action.triggered.connect(
+                lambda _checked=False, profile=profile: self._switch_claude_profile(profile)
+            )
+            self._claude_profile_actions[name] = action
+
+    def _open_claude_profiles_dialog(self) -> None:
+        """Open the form used to add and edit Claude profile templates."""
+        try:
+            profiles = load_profiles()
+        except ClaudeProfileError as exc:
+            self._tray_icon.showMessage(
+                "Claude 配置",
+                str(exc),
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
+            return
+
+        dialog = ClaudeProfilesDialog(profiles, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._reload_claude_profile_menu()
+            self._tray_icon.showMessage(
+                "Claude 配置",
+                "配置模板已保存，可从菜单选择要使用的配置",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+
+    def _switch_claude_profile(self, profile: dict) -> None:
+        """Apply a profile and refresh the menu only after a successful write."""
+        name = profile.get("name", "未命名配置")
+        try:
+            apply_profile(profile)
+            for profile_name, action in self._claude_profile_actions.items():
+                action.setChecked(profile_name == name)
+            self._tray_icon.showMessage(
+                "Claude 配置",
+                f"已切换到 {name}，重启 Claude Code 后生效",
+                QSystemTrayIcon.MessageIcon.Information,
+                4000,
+            )
+        except ClaudeProfileError as exc:
+            # QAction can become checked before its slot runs; restore the
+            # actual state so a failed write is never shown as successful.
+            try:
+                active_name = current_profile_name(self._claude_profiles)
+            except ClaudeProfileError:
+                active_name = None
+            for profile_name, action in self._claude_profile_actions.items():
+                action.setChecked(profile_name == active_name)
+            self._tray_icon.showMessage(
+                "Claude 配置切换失败",
+                str(exc),
+                QSystemTrayIcon.MessageIcon.Warning,
+                5000,
+            )
 
     def _set_router_state(self, enabled: bool | None):
         state = "状态未知" if enabled is None else "已开启" if enabled else "已关闭"

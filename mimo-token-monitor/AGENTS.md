@@ -34,6 +34,7 @@ Python 模块采用单目录扁平结构：
 - **playwright_session.py** — 可选的独立 Playwright 持久化登录会话。定时刷新和过期恢复默认使用 headless Chromium；打开平台页后轮询等待小米账号 SSO 回跳并读取 `api-platform_serviceToken` 等 Cookie（SSO 常需十余秒，禁止打开后立刻读一次就失败）。手动续期使用 headed 浏览器，可传入 `cookie_validator`，保持窗口直到 Cookie 通过 API 校验或超时。不使用现有 Chrome/Edge User Data。
 - **widget.py** — 全部 UI 代码。`FetchWorker(QThread)` 后台线程发请求，`SettingsDialog` 设置表单，`TokenWidget` 主悬浮窗（自定义 `paintEvent`、拖动+边缘吸附、跨屏跨窗口吸附、标题栏置顶按钮、右键菜单、定时刷新、数据解析、tooltip、系统托盘）。悬浮窗和托盘右键菜单均支持「从浏览器导入」快速导入 Cookie（自动保存并刷新）；托盘还通过后台线程显示 Codex Router 当前开关状态并提供启停和重启入口，以及重启悬浮窗入口。
 - **router_control.py** — Codex Router 托盘操作边界。优先从安装清单读取源码目录，可由 `MIMO_TOKEN_MONITOR_ROUTER_ROOT` 覆盖；状态读取复用 Router 的 `status.mjs --json`，主代理 GPT/WLB/SuperGPT/自动切换调用 `gpt-route.mjs official|wlb|supergpt|auto`，子代理供应商切换调用 `gpt-route.mjs subagent official|wlb|supergpt|auto`，其余操作只串行调用路由器现有脚本，并在首个失败处停止。
+- **claude_profiles.py** — Claude Code 配置模板与切换。首次使用从 `~/.claude/settings.json` 创建 `~/.claude/claude_profiles.json` 的 `API-Claude` 模板；托盘可切换模板，原子写回 settings.json 时只替换指定 `env` 参数，保留 hooks、权限和插件等其他内容。
 - **window_snap.py** — Win32 顶层窗口枚举、窗口标题筛选、Qt 逻辑坐标与 Win32 物理像素坐标转换，以及跨屏跨窗口边框吸附的纯几何计算。
 - **supergpt_balance.py** — 复用 Router 的 SuperGPT API Key，只读查询 `https://api.supergpt.dev/v1/usage` 的账户 `balance` 和 `unit`；环境变量优先，持久化文件须为普通文件，拒绝符号链接。不复制密钥进设置或日志，不跟随 HTTP 重定向；查询失败返回安全错误，不把缺失余额当作 0。
 - **snapshot_writer.py** — 快照写入。为 claude-hud 生成用量快照 JSON 文件，包含余额、用量、今日用量等信息。

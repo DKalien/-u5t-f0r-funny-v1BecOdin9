@@ -17,6 +17,7 @@ MiMo Token Plan、WLB、GPT 5 小时/周限额用量及 SuperGPT 账户余额监
 - 可拖动、半透明、置顶显示；标题栏图钉按钮可切换置顶状态，默认置顶并自动保存
 - **跨窗口边框吸附**：可与 ETF Tracker 悬浮窗相互吸附，主屏和副屏均支持，并兼容不同 DPI 的显示器
 - **系统托盘**：最小化到托盘，双击恢复，实时 tooltip，并可直接重启悬浮窗
+- **Claude 配置切换**：从托盘在多个 Claude Code 配置模板之间切换，只更新 `~/.claude/settings.json` 的指定 `env` 参数
 - **Codex Router 维护**：从托盘查看当前状态、分别切换主代理和子代理的官方 / WLB / SuperGPT 路由，并开启、关闭或重启路由器
 - **单实例运行**：防止重复启动；再次运行会自动恢复并置顶已有窗口
 - **WLB 用量显示**：标题栏循环图标可切换 MiMo Token / WLB 模式，支持配置 WLB API（默认 https://codex.wlbclub.com），显示剩余百分比、已用百分比、进度条和状态；接口返回 `reset_at` 时同时显示 7 日窗口重置日期
@@ -140,7 +141,31 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - **系统托盘**：
   - 双击托盘图标：恢复显示悬浮窗
   - 右键托盘图标：显示主窗口 / 刷新 / 从浏览器导入 / Playwright 续期 /
-    路由控制 / 重启悬浮窗 / 退出
+    切换 Claude 配置 / 路由控制 / 重启悬浮窗 / 退出
+  - **切换 Claude 配置**：首次运行会把当前 `settings.json` 中的配置保存为
+    `API-Claude`。进入二级菜单中的“编辑配置…”即可通过窗口新增、编辑或删除配置，保存后模板会立即刷新。
+    配置模板文件为 `C:\Users\你的用户名\.claude\claude_profiles.json`，也可以直接编辑该文件；每个对象只需填写 `name` 和以下 `env` 参数：
+    `ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`、
+    `ANTHROPIC_DEFAULT_FABLE_MODEL`、`ANTHROPIC_DEFAULT_OPUS_MODEL`、
+    `ANTHROPIC_DEFAULT_SONNET_MODEL`、`ANTHROPIC_DEFAULT_HAIKU_MODEL`、
+    `CLAUDE_CODE_SUBAGENT_MODEL`。模板格式示例：
+    ```json
+    [
+      {
+        "name": "API-GPT",
+        "env": {
+          "ANTHROPIC_AUTH_TOKEN": "填写 token",
+          "ANTHROPIC_BASE_URL": "https://example.com",
+          "ANTHROPIC_DEFAULT_FABLE_MODEL": "填写模型名",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "填写模型名",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "填写模型名",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "填写模型名",
+          "CLAUDE_CODE_SUBAGENT_MODEL": "填写模型名"
+        }
+      }
+    ]
+    ```
+    切换时其他 settings 内容（hooks、权限、插件等）保持不变；Claude Code 已打开的会话通常需要重启后生效。
   - 路由控制：菜单显示“已开启”“已关闭”或“状态未知”；主代理可选择自动（WLB → GPT → SuperGPT）或切换到 WLB / SuperGPT / GPT，子代理可选择自动（GPT → SuperGPT）或手动切换供应商，也可开启、关闭或重启 Codex Router
   - 重启悬浮窗：退出当前进程并释放单实例锁后启动新实例
   - 悬停托盘图标：显示用量概览
@@ -239,7 +264,7 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - 可通过环境变量 `MIMO_TOKEN_MONITOR_DATA_DIR` 覆盖本地数据目录。
 - 首次运行时，如果外置库无配置且旧文件 `~/.mimo-widget/config.json` 存在，会自动读取并迁移；旧文件保留，但不再作为主配置来源。
 - 数据库仅在本机读写，不执行 Git 拉取、提交或推送；轻量启动器的源码更新功能不受影响。
-- **敏感数据提示**：数据库中会包含 Cookie、API Key 等明文凭据，请勿手动加入 Git 或公开仓库。
+- **敏感数据提示**：数据库和 `claude_profiles.json` 中会包含 Cookie、API Key、Claude Auth Token 等明文凭据，请勿手动加入 Git 或公开仓库。
 
 可用环境变量：
 

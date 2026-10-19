@@ -5,3 +5,5 @@ build/
 *.spec
 !MiMo-Token-Monitor.spec
 .mimo-widget/
+# Claude Code profile templates contain auth tokens.
+claude_profiles.json

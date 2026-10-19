@@ -62,6 +62,14 @@ def playwright_user_data_dir() -> str:
     return os.path.join(_project_data_dir(), "playwright-profile")
 
 
+def claude_profiles_path() -> str:
+    """Return the local Claude profile template file path."""
+    override = os.environ.get("MIMO_CLAUDE_PROFILES_PATH")
+    if override:
+        return override
+    return os.path.join(os.path.expanduser("~"), ".claude", "claude_profiles.json")
+
+
 def _ensure_db(conn: sqlite3.Connection) -> None:
     """Ensure the settings schema exists on an open connection."""
     with conn:
