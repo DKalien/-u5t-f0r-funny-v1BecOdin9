@@ -172,11 +172,61 @@ class TestPlaywrightSession(unittest.TestCase):
             with self.assertRaises(PlaywrightSessionError) as raised:
                 session.start()
         self.assertIn("持久化会话启动失败", str(raised.exception))
+        self.assertIn("阶段：启动 Chromium", str(raised.exception))
+        self.assertIn("RuntimeError", str(raised.exception))
+        self.assertNotIn("errno=", str(raised.exception))
         self.assertNotIn("SECRET_COOKIE", str(raised.exception))
         self.assertEqual(playwright.stop_calls, 1)
 
         session.close()
         self.assertEqual(context.close_calls, 0)
+
+    def test_start_oserror_reports_stage_and_codes_without_sensitive_details(self):
+        for stage in ("创建专用目录", "启动 Playwright 驱动", "启动 Chromium"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as tmp:
+                error = OSError(13, "cookie=SECRET_COOKIE", "C:/PRIVATE_PROFILE")
+                error.winerror = 5
+                runtime = Mock()
+                manager = Mock()
+                manager.start.return_value = runtime
+                if stage == "启动 Playwright 驱动":
+                    manager.start.side_effect = error
+                elif stage == "启动 Chromium":
+                    runtime.chromium.launch_persistent_context.side_effect = error
+                session = PlaywrightSession(Path(tmp) / "profile")
+                with (
+                    patch.object(Path, "mkdir", side_effect=error if stage == "创建专用目录" else None),
+                    patch.object(playwright_session, "_load_sync_playwright", return_value=lambda: manager),
+                    self.assertRaises(PlaywrightSessionError) as raised,
+                ):
+                    session.start()
+                message = str(raised.exception)
+                self.assertIn(f"阶段：{stage}", message)
+                self.assertIn("errno=13", message)
+                self.assertIn("winerror=5", message)
+                self.assertNotIn("SECRET_COOKIE", message)
+                self.assertNotIn("PRIVATE_PROFILE", message)
+                self.assertNotIn(tmp, message)
+                self.assertIs(raised.exception.__cause__, error)
+                self.assertIsNone(session.context)
+                self.assertIsNone(session._playwright)
+                if stage == "启动 Chromium":
+                    runtime.stop.assert_called_once_with()
+                else:
+                    runtime.stop.assert_not_called()
+
+    def test_start_oserror_without_codes_does_not_invent_them(self):
+        error = OSError("SECRET_COOKIE")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(Path, "mkdir", side_effect=error),
+            self.assertRaises(PlaywrightSessionError) as raised,
+        ):
+            PlaywrightSession(tmp).start()
+        self.assertIn("OSError", str(raised.exception))
+        self.assertNotIn("errno=", str(raised.exception))
+        self.assertNotIn("winerror=", str(raised.exception))
+        self.assertNotIn("SECRET_COOKIE", str(raised.exception))
 
     def test_refresh_cookie_uses_project_profile_and_returns_tuple(self):
         session = Mock()

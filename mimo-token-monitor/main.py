@@ -1,4 +1,5 @@
 import ctypes
+import os
 import sys
 from ctypes import wintypes
 from pathlib import Path
@@ -97,6 +98,10 @@ def initialize_window():
     return widget
 
 def main() -> int:
+    # pythonw 没有 stderr，Playwright 驱动需要持久有效的文件描述符。
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
     mutex = check_single_instance()
     if mutex is None:
         activate_existing_instance()

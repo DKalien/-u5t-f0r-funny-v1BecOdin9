@@ -87,14 +87,17 @@ class PlaywrightSession:
         if self._context is not None:
             return self._context
 
+        stage = "创建专用目录"
         try:
             if _is_browser_profile_path(self.user_data_dir):
                 raise PlaywrightSessionError(
                     "user_data_dir 必须是独立目录，不能使用 Chrome/Edge User Data"
                 )
             self.user_data_dir.mkdir(parents=True, exist_ok=True)
+            stage = "启动 Playwright 驱动"
             sync_playwright = _load_sync_playwright()
             self._playwright = sync_playwright().start()
+            stage = "启动 Chromium"
             options = dict(self.launch_options)
             options.setdefault("headless", self.headless)
             self._context = self._playwright.chromium.launch_persistent_context(
@@ -106,9 +109,15 @@ class PlaywrightSession:
             raise
         except Exception as exc:
             self._close_runtime()
+            error_codes = ""
+            if isinstance(exc, OSError):
+                for name in ("errno", "winerror"):
+                    value = getattr(exc, name, None)
+                    if isinstance(value, int):
+                        error_codes += f"，{name}={value}"
             raise PlaywrightSessionError(
-                "Playwright 持久化会话启动失败，"
-                f"（{type(exc).__name__}）；请确认 Chromium 已安装且专用目录可写"
+                f"Playwright 持久化会话启动失败，阶段：{stage}"
+                f"（{type(exc).__name__}{error_codes}）；请确认 Chromium 已安装且专用目录可写"
             ) from exc
 
     def open_mimo(

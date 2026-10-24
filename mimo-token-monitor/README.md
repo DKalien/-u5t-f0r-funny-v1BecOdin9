@@ -72,6 +72,14 @@ python -m playwright install chromium
 人工登录时，可从托盘或悬浮窗菜单手动执行「Playwright 续期」。验证码仍然需要人工输入。
 Playwright 不能延长服务端设置的 Cookie 有效期。
 
+若提示“持久化会话启动失败”，错误会标明失败阶段（创建专用目录、启动 Playwright 驱动或
+启动 Chromium）；`OSError` 还会显示可用的 `errno` / `winerror` 数字，便于定位原因。
+提示不会包含原始异常消息、目录路径或 Cookie；仅凭 `OSError` 类型不能确定具体根因。
+
+通过 `pythonw` 或无控制台 EXE 启动时，入口会在创建后台线程前为缺失的 `sys.stderr`
+提供持续有效的空设备流，避免 Playwright 驱动继承无效错误输出句柄而出现 `winerror=6`。
+已有的错误输出流保持原样；此修复修改源码后重启悬浮窗即可生效。
+
 **方式一：一键导入（推荐）**
 
 1. 在 Edge 快捷方式「属性 → 目标」末尾添加（注意前面有空格）：

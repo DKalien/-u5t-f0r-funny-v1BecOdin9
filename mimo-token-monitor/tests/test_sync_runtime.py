@@ -35,6 +35,42 @@ def managed_widget(cfg, **kwargs):
 
 
 class TestStartupRuntime(unittest.TestCase):
+    @patch("main.activate_existing_instance")
+    @patch("main.check_single_instance", return_value=None)
+    def test_missing_stderr_gets_persistent_descriptor_before_startup(self, check, _activate):
+        from main import main
+
+        stream = None
+        try:
+            with patch.object(sys, "stderr", None):
+                def check_stderr():
+                    self.assertIsNotNone(sys.stderr)
+                    os.fstat(sys.stderr.fileno())
+                    return None
+
+                check.side_effect = check_stderr
+                self.assertEqual(main(), 0)
+                stream = sys.stderr
+                self.assertFalse(stream.closed)
+                stream.write("Playwright stderr\n")
+                stream.flush()
+                self.assertEqual(main(), 0)
+                self.assertIs(sys.stderr, stream)
+        finally:
+            if stream is not None:
+                stream.close()
+
+    @patch("main.activate_existing_instance")
+    @patch("main.check_single_instance", return_value=None)
+    def test_existing_stderr_is_preserved(self, _check, _activate):
+        from main import main
+
+        stream = sys.stderr
+        with patch("main.open", create=True) as open_stream:
+            self.assertEqual(main(), 0)
+        self.assertIs(sys.stderr, stream)
+        open_stream.assert_not_called()
+
     @patch("main.load_config", return_value={"cookie": "x"})
     def test_initialize_window_loads_local_config_before_showing(self, load_config):
         calls = []
