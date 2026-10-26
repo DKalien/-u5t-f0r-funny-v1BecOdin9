@@ -979,9 +979,32 @@ class TestOverviewTooltipLines(unittest.TestCase):
             self.assertEqual(w._last_error, "MiMo: HTTP 403")
             w.cfg["display_mode"] = THIRD_PARTY_MODE
             w._refresh_error_state()
-            self.assertEqual(w._last_error, "WLB: WLB down")
+            self.assertEqual(w._last_error, "WLB: down")
         finally:
             w.close()
+
+    def test_provider_prefix_removed_from_bottom_and_tooltip(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        try:
+            for provider, attr in (("GPT", "_gpt_error"), ("SuperGPT", "_supergpt_error")):
+                for prefix in (f"{provider}: ", f"{provider.lower()}：", f"{provider.upper()} "):
+                    with self.subTest(provider=provider, prefix=prefix):
+                        w._gpt_error = w._supergpt_error = ""
+                        original = f"{prefix}HTTP 403"
+                        setattr(w, attr, original)
+                        w._refresh_error_state()
+                        w._apply_overview_tooltip_if_needed()
+                        self.assertEqual(w._last_error, f"{provider}: HTTP 403")
+                        error_line = next(line for line in w.toolTip().splitlines() if "HTTP 403" in line)
+                        self.assertEqual(error_line.count(provider), 1)
+                        self.assertEqual(getattr(w, attr), original)
+        finally:
+            w.close()
+
+    def test_empty_error_detail_falls_back_to_unknown(self):
+        for error in ("GPT: ", "gpt：", "GPT ", "   "):
+            with self.subTest(error=error):
+                self.assertEqual(TokenWidget._error_display_detail("GPT", error), "未知错误")
 
     def test_supergpt_callback_updates_and_clears_bottom_error(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)

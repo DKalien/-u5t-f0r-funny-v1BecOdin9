@@ -9,6 +9,46 @@ from api_client import (
 )
 
 
+class TestDirectUsageRequests(unittest.TestCase):
+    def test_direct_queries_keep_parameters_and_close_responses(self):
+        import api_client
+        cases = (
+            (api_client.fetch_balance, ("cookie",), api_client.BALANCE_URL, api_client._headers("cookie"), 10, {"balance": 12}),
+            (api_client.fetch_usage, ("cookie",), api_client.USAGE_URLS[0], api_client._headers("cookie"), 10, {"code": 0}),
+            (api_client.fetch_third_party_usage, ("https://example.test", "key"), "https://example.test/v1/usage", {"Authorization": "Bearer key"}, 15, {"rate_limits": [{"window": "7d", "limit": 100, "used": 1}]}),
+        )
+        for fetch, args, url, headers, timeout, payload in cases:
+            for status in (200, 401, "json_error"):
+                with self.subTest(fetch=fetch.__name__, status=status), patch("api_client.requests.Session") as factory:
+                    client = factory.return_value.__enter__.return_value
+                    count = len(api_client.USAGE_URLS) if fetch is api_client.fetch_usage and status == "json_error" else 1
+                    responses = [Mock(status_code=200 if status == "json_error" else status) for _ in range(count)]
+                    for response in responses:
+                        response.json.return_value = payload
+                        if status == "json_error":
+                            response.json.side_effect = ValueError("invalid JSON")
+                    client.get.side_effect = responses
+                    self.assertEqual(fetch(*args)["ok"], status == 200)
+                    self.assertIs(client.trust_env, False)
+                    if count == 1:
+                        client.get.assert_called_once_with(url, headers=headers, timeout=timeout)
+                    for response in responses:
+                        response.close.assert_called_once()
+
+    def test_mimo_usage_fallback_closes_each_response(self):
+        import api_client
+        with patch("api_client.requests.Session") as factory:
+            client = factory.return_value.__enter__.return_value
+            responses = [Mock(status_code=404), Mock(status_code=200)]
+            responses[1].json.return_value = {"data": {}}
+            client.get.side_effect = responses
+            self.assertTrue(api_client.fetch_usage("cookie")["ok"])
+            self.assertEqual(factory.call_count, 2)
+            self.assertIs(client.trust_env, False)
+            for response in responses:
+                response.close.assert_called_once()
+
+
 class TestThirdPartyUsageUrl(unittest.TestCase):
     def test_default_base_url(self):
         self.assertEqual(DEFAULT_THIRD_PARTY_BASE_URL, "https://codex.wlbclub.com")
@@ -35,12 +75,15 @@ class TestThirdPartyUsageUrl(unittest.TestCase):
             "https://example.test/v1/usage",
         )
 
-    @patch("api_client.requests.get")
-    def test_fetch_uses_normalized_v1_path(self, get):
+    @patch("api_client.requests.Session")
+    def test_fetch_uses_normalized_v1_path(self, session):
+        get = session.return_value.__enter__.return_value.get
         response = Mock(status_code=401)
         get.return_value = response
 
         result = fetch_third_party_usage("https://example.test/v1", "test-key")
+        self.assertIs(session.return_value.__enter__.return_value.trust_env, False)
+        response.close.assert_called_once()
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["url"], "https://example.test/v1/usage")
@@ -87,8 +130,9 @@ class TestThirdPartyUsageParser(unittest.TestCase):
 
         self.assertEqual(result["reset_after_seconds"], 0)
 
-    @patch("api_client.requests.get")
-    def test_fetch_keeps_weekly_flat_and_attaches_daily(self, get):
+    @patch("api_client.requests.Session")
+    def test_fetch_keeps_weekly_flat_and_attaches_daily(self, session):
+        get = session.return_value.__enter__.return_value.get
         response = Mock(status_code=200)
         response.json.return_value = {
             "rate_limits": [
@@ -135,8 +179,9 @@ class TestThirdPartyUsageParser(unittest.TestCase):
         self.assertEqual(daily["remaining_percent"], 0.0)
         self.assertEqual(result["used_percent"], 100.02)
 
-    @patch("api_client.requests.get")
-    def test_missing_daily_window_does_not_fail_weekly_fetch(self, get):
+    @patch("api_client.requests.Session")
+    def test_missing_daily_window_does_not_fail_weekly_fetch(self, session):
+        get = session.return_value.__enter__.return_value.get
         response = Mock(status_code=200)
         response.json.return_value = {
             "rate_limits": [{"window": "7d", "used": 25, "limit": 100}]

@@ -30,16 +30,16 @@ class TestSuperGPTBalance(unittest.TestCase):
             with self.subTest(mode=mode), patch.dict(os.environ, {"CODEX_HOME": "unused"}, clear=True), \
                  patch.object(Path, "lstat", return_value=Mock(st_mode=mode)), \
                  patch.object(Path, "read_text") as read, \
-                 patch("supergpt_balance.requests.get") as get:
+                 patch("supergpt_balance.requests.Session") as session:
                 result = supergpt_balance.fetch_balance()
                 self.assertFalse(result["ok"])
                 read.assert_not_called()
-                get.assert_not_called()
+                session.assert_not_called()
 
     def test_missing_key_never_makes_a_request(self):
-        with patch("supergpt_balance._api_key", return_value=""), patch("supergpt_balance.requests.get") as get:
+        with patch("supergpt_balance._api_key", return_value=""), patch("supergpt_balance.requests.Session") as session:
             self.assertFalse(supergpt_balance.fetch_balance()["ok"])
-            get.assert_not_called()
+            session.assert_not_called()
 
     def test_balance_is_account_balance_including_zero_not_key_remaining(self):
         for amount in (0, 35.11384311, "12.50", -0.01):
@@ -47,9 +47,13 @@ class TestSuperGPTBalance(unittest.TestCase):
                 response = Mock(status_code=200)
                 response.json.return_value = {"balance": amount, "remaining": 999, "unit": "USD", "isValid": True}
                 with patch("supergpt_balance._api_key", return_value="test-secret"), \
-                     patch("supergpt_balance.requests.get", return_value=response) as get:
+                     patch("supergpt_balance.requests.Session") as session:
+                    client = session.return_value.__enter__.return_value
+                    client.get.return_value = response
                     self.assertEqual(supergpt_balance.fetch_balance(), {"ok": True, "balance": float(amount), "currency": "USD", "error": None})
-                    get.assert_called_once_with("https://api.supergpt.dev/v1/usage", headers={"Authorization": "Bearer test-secret"}, timeout=(3, 10), allow_redirects=False)
+                    session.assert_called_once_with()
+                    self.assertIs(client.trust_env, False)
+                    client.get.assert_called_once_with("https://api.supergpt.dev/v1/usage", headers={"Authorization": "Bearer test-secret"}, timeout=(3, 10), allow_redirects=False)
                     response.close.assert_called_once()
 
     def test_invalid_response_never_becomes_zero_or_exposes_body(self):
@@ -60,7 +64,8 @@ class TestSuperGPTBalance(unittest.TestCase):
             with self.subTest(value=value):
                 response = Mock(status_code=200)
                 response.json.return_value = value
-                with patch("supergpt_balance._api_key", return_value="test-secret"), patch("supergpt_balance.requests.get", return_value=response):
+                with patch("supergpt_balance._api_key", return_value="test-secret"), patch("supergpt_balance.requests.Session") as session:
+                    session.return_value.__enter__.return_value.get.return_value = response
                     result = supergpt_balance.fetch_balance()
                 self.assertFalse(result["ok"])
                 self.assertIsNone(result["balance"])
@@ -70,17 +75,22 @@ class TestSuperGPTBalance(unittest.TestCase):
         for code in (301, 401, 403, 429, 500):
             with self.subTest(code=code):
                 response = Mock(status_code=code, text="test-secret")
-                with patch("supergpt_balance._api_key", return_value="test-secret"), patch("supergpt_balance.requests.get", return_value=response):
+                with patch("supergpt_balance._api_key", return_value="test-secret"), patch("supergpt_balance.requests.Session") as session:
+                    session.return_value.__enter__.return_value.get.return_value = response
                     result = supergpt_balance.fetch_balance()
                 self.assertFalse(result["ok"])
                 self.assertNotIn("test-secret", result["error"])
                 response.json.assert_not_called()
+                response.close.assert_called_once()
         response = Mock(status_code=200)
         response.json.side_effect = ValueError("test-secret")
-        with patch("supergpt_balance._api_key", return_value="test-secret"), patch("supergpt_balance.requests.get", return_value=response):
+        with patch("supergpt_balance._api_key", return_value="test-secret"), patch("supergpt_balance.requests.Session") as session:
+            session.return_value.__enter__.return_value.get.return_value = response
             self.assertNotIn("test-secret", supergpt_balance.fetch_balance()["error"])
+            response.close.assert_called_once()
         with patch("supergpt_balance._api_key", return_value="test-secret"), \
-             patch("supergpt_balance.requests.get", side_effect=supergpt_balance.requests.Timeout("test-secret")):
+             patch("supergpt_balance.requests.Session") as session:
+            session.return_value.__enter__.return_value.get.side_effect = supergpt_balance.requests.Timeout("test-secret")
             self.assertNotIn("test-secret", supergpt_balance.fetch_balance()["error"])
 
 

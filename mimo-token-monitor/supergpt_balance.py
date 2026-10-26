@@ -41,12 +41,14 @@ def fetch_balance() -> dict:
     if not key:
         return _failure("请先通过 provider-key supergpt-relay set 配置密钥")
     try:
-        response = requests.get(
-            USAGE_URL,
-            headers={"Authorization": f"Bearer {key}"},
-            timeout=(3, 10),
-            allow_redirects=False,
-        )
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.get(
+                USAGE_URL,
+                headers={"Authorization": f"Bearer {key}"},
+                timeout=(3, 10),
+                allow_redirects=False,
+            )
     except requests.RequestException:
         return _failure("SuperGPT 余额查询网络连接失败")
     try:

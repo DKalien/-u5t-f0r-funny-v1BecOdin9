@@ -34,8 +34,11 @@ def _headers(cookie: str) -> dict:
 
 
 def fetch_balance(cookie: str) -> dict:
+    resp = None
     try:
-        resp = requests.get(BALANCE_URL, headers=_headers(cookie), timeout=10)
+        with requests.Session() as session:
+            session.trust_env = False
+            resp = session.get(BALANCE_URL, headers=_headers(cookie), timeout=10)
         if resp.status_code == 401:
             return {"ok": False, "balance": None, "error": "Cookie 已过期，请重新获取"}
         if resp.status_code >= 400:
@@ -58,6 +61,9 @@ def fetch_balance(cookie: str) -> dict:
         return {"ok": False, "balance": None, "error": "网络连接失败"}
     except Exception as e:
         return {"ok": False, "balance": None, "error": str(e)[:100]}
+    finally:
+        if resp is not None:
+            resp.close()
 
 
 def fetch_usage(cookie: str) -> dict:
@@ -66,8 +72,11 @@ def fetch_usage(cookie: str) -> dict:
     errors = []
 
     for url in USAGE_URLS:
+        resp = None
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            with requests.Session() as session:
+                session.trust_env = False
+                resp = session.get(url, headers=headers, timeout=10)
             if resp.status_code == 401:
                 return {"ok": False, "data": None, "error": "Cookie 已过期，请重新获取"}
             if resp.status_code == 404:
@@ -86,6 +95,9 @@ def fetch_usage(cookie: str) -> dict:
             errors.append(f"{url.split('/')[-1]}: 格式不匹配")
         except Exception as e:
             errors.append(f"{url.split('/')[-1]}: {str(e)[:30]}")
+        finally:
+            if resp is not None:
+                resp.close()
 
     return {"ok": False, "data": None, "error": f"所有端点均失败: {'; '.join(errors[:3])}"}
 
@@ -204,12 +216,15 @@ def fetch_third_party_usage(base_url: str, api_key: str, window: str = "7d") -> 
     if not str(api_key or "").strip():
         return {"ok": False, "data": None, "error": "API Key 不能为空", "url": url}
 
+    resp = None
     try:
-        resp = requests.get(
-            url,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=15,
-        )
+        with requests.Session() as session:
+            session.trust_env = False
+            resp = session.get(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=15,
+            )
         if resp.status_code == 401:
             return {"ok": False, "data": None, "error": "API Key 无效或已过期", "url": url}
         if resp.status_code >= 400:
@@ -231,6 +246,10 @@ def fetch_third_party_usage(base_url: str, api_key: str, window: str = "7d") -> 
         return {"ok": False, "data": None, "error": "响应不是有效 JSON", "url": url}
     except Exception as e:
         return {"ok": False, "data": None, "error": str(e)[:100], "url": url}
+    finally:
+        if resp is not None:
+            resp.close()
+
 
 # -- GPT Weekly Usage -------------------------------------------------------
 

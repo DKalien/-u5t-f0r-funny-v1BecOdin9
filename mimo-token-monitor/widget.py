@@ -855,7 +855,8 @@ class TokenWidget(QWidget):
             lines.append(f"SuperGPT 更新于: {self._supergpt_last_update}")
         if self._supergpt_error:
             stale = "（数据已过期，继续显示上次余额）" if self._supergpt_balance else ""
-            lines.append(f"SuperGPT{stale}: {self._supergpt_error}")
+            detail = self._error_display_detail("SuperGPT", self._supergpt_error)
+            lines.append(f"SuperGPT{stale}: {detail}")
         has_cookie = bool(self.cfg.get("cookie", "").strip())
         mimo_pct = (self._plan_used / self._plan_total * 100) if has_cookie and self._plan_total > 0 else None
         lines.append(f"Token Plan 剩余: {self._format_overview_percent(mimo_pct, has_cookie)}")
@@ -881,13 +882,32 @@ class TokenWidget(QWidget):
         lines.append(f"GPT \u5468\u9650\u989d剩余: {self._format_overview_percent(gpt_pct, has_gpt)}")
         return lines
 
+    @staticmethod
+    def _error_display_detail(provider: str, error: str) -> str:
+        detail = str(error or "").strip()
+        for prefix in (f"{provider}:", f"{provider}：", f"{provider} "):
+            if detail.casefold().startswith(prefix.casefold()):
+                detail = detail[len(prefix):].strip()
+                break
+        if detail.casefold() == provider.casefold():
+            detail = ""
+        return detail or "未知错误"
+
     def _refresh_error_state(self):
         """按当前页面显示对应供应商错误，同时保留各来源原始错误。"""
         display_mode = self.cfg.get("display_mode", MIMO_MODE)
         if display_mode == MIMO_MODE:
-            self._last_error = f"MiMo: {self._mimo_error}" if self._mimo_error else ""
+            self._last_error = (
+                f"MiMo: {self._error_display_detail('MiMo', self._mimo_error)}"
+                if self._mimo_error
+                else ""
+            )
         elif display_mode == THIRD_PARTY_MODE:
-            self._last_error = f"WLB: {self._tp_error}" if self._tp_error else ""
+            self._last_error = (
+                f"WLB: {self._error_display_detail('WLB', self._tp_error)}"
+                if self._tp_error
+                else ""
+            )
         else:
             errors = (
                 ("MiMo", self._mimo_error),
@@ -896,7 +916,11 @@ class TokenWidget(QWidget):
                 ("SuperGPT", self._supergpt_error),
             )
             self._last_error = next(
-                (f"{name}: {error}" for name, error in errors if error),
+                (
+                    f"{name}: {self._error_display_detail(name, error)}"
+                    for name, error in errors
+                    if error
+                ),
                 "",
             )
 
@@ -2473,11 +2497,19 @@ class TokenWidget(QWidget):
             lines = self._build_overview_tooltip_lines()
         if display_mode == OVERVIEW_MODE:
             if self._mimo_error:
-                lines.append(f"Token Plan 错误: {self._mimo_error}")
+                lines.append(
+                    "Token Plan 错误: "
+                    f"{self._error_display_detail('MiMo', self._mimo_error)}"
+                )
             if self._tp_error:
-                lines.append(f"WLB 错误: {self._tp_error}")
+                lines.append(
+                    f"WLB 错误: {self._error_display_detail('WLB', self._tp_error)}"
+                )
             if self._gpt_error:
-                lines.append(f"GPT \u5468\u9650\u989d \u9519\u8bef: {self._gpt_error}")
+                lines.append(
+                    "GPT \u5468\u9650\u989d \u9519\u8bef: "
+                    f"{self._error_display_detail('GPT', self._gpt_error)}"
+                )
         elif self._last_error:
             lines.append(f"错误: {self._last_error}")
         if self._router_status:
