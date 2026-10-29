@@ -338,6 +338,104 @@ class TestGPTWeeklyUsageParser(unittest.TestCase):
 
 class TestFetchGPTWeeklyUsage(unittest.TestCase):
 
+    def test_jsonl_selects_event_time_instead_of_file_modification_time(self):
+        import json
+        import os
+        import pathlib
+        import tempfile
+        from api_client import _gpt_try_jsonl
+
+        with tempfile.TemporaryDirectory() as td:
+            sessions = pathlib.Path(td) / ".codex" / "sessions"
+            sessions.mkdir(parents=True)
+            for name, timestamp, used, modified in (
+                ("old", "2026-10-29T16:00:00+08:00", 1, 200),
+                ("new", "2026-10-29T09:00:00Z", 9, 100),
+            ):
+                path = sessions / f"rollout-{name}.jsonl"
+                entry = {"timestamp": timestamp, "payload": {
+                    "rate_limits": {"secondary": {"used_percent": used}},
+                }}
+                path.write_text(json.dumps(entry) + '\n' + json.dumps({"payload": {"message": "继续执行"}}), encoding="utf-8")
+                os.utime(path, (modified, modified))
+            with patch("api_client._pl.Path.home", return_value=pathlib.Path(td)):
+                result = _gpt_try_jsonl()
+
+        self.assertEqual(result["used_percent"], 9)
+        self.assertEqual(result["observed_at"], "2026-10-29T09:00:00Z")
+
+    def test_jsonl_ignores_missing_invalid_or_naive_timestamps(self):
+        import json
+        import pathlib
+        import tempfile
+        from api_client import _gpt_try_jsonl
+
+        with tempfile.TemporaryDirectory() as td:
+            sessions = pathlib.Path(td) / ".codex" / "sessions"
+            sessions.mkdir(parents=True)
+            entries = [{"timestamp": timestamp, "payload": {"rate_limits": {
+                "secondary": {"used_percent": 9},
+            }}} for timestamp in (None, "invalid", "2026-10-29T09:00:00")]
+            (sessions / "rollout-invalid.jsonl").write_text(
+                '\n'.join(json.dumps(entry) for entry in entries), encoding="utf-8",
+            )
+            errors = []
+            with patch("api_client._pl.Path.home", return_value=pathlib.Path(td)):
+                self.assertIsNone(_gpt_try_jsonl(errors))
+            self.assertIn("有效时间", errors[0])
+
+    def test_jsonl_new_snapshot_does_not_reuse_old_primary_window(self):
+        import json
+        import pathlib
+        import tempfile
+        from api_client import _gpt_try_jsonl
+
+        with tempfile.TemporaryDirectory() as td:
+            sessions = pathlib.Path(td) / ".codex" / "sessions"
+            sessions.mkdir(parents=True)
+            entries = [
+                {"timestamp": "2026-10-29T08:00:00Z", "payload": {"rate_limits": {
+                    "primary": {"used_percent": 6}, "secondary": {"used_percent": 1},
+                }}},
+                {"timestamp": "2026-10-29T09:00:00Z", "payload": {"rate_limits": {
+                    "secondary": {"used_percent": 9},
+                }}},
+            ]
+            (sessions / "rollout-one.jsonl").write_text(
+                '\n'.join(json.dumps(entry) for entry in entries), encoding="utf-8",
+            )
+            with patch("api_client._pl.Path.home", return_value=pathlib.Path(td)):
+                result = _gpt_try_jsonl()
+        self.assertIsNone(result["primary"])
+        self.assertEqual(result["secondary"]["used_percent"], 9)
+
+    def test_jsonl_fallback_retains_live_source_failures(self):
+        from api_client import fetch_gpt_weekly_usage
+
+        def fail_auth(errors):
+            errors.append("本机 Codex 登录: 请求超时")
+
+        fallback = {"source": "local_jsonl", "used_percent": 1}
+        with (patch("api_client._gpt_try_local_auth", side_effect=fail_auth),
+              patch("api_client._gpt_try_jsonl", return_value=fallback)):
+            result = fetch_gpt_weekly_usage()
+
+        self.assertTrue(result["ok"])
+        self.assertIn("本机 Codex 登录: 请求超时", result["data"]["source_errors"])
+        self.assertIn("ChatGPT Cookie: 未配置", result["data"]["source_errors"])
+
+    def test_live_usage_success_does_not_read_historical_fallback(self):
+        from api_client import fetch_gpt_weekly_usage
+
+        live = {"source": "local_codex_auth", "used_percent": 9}
+        with (patch("api_client._gpt_try_local_auth", return_value=live),
+              patch("api_client._gpt_try_session_cookie") as cookie,
+              patch("api_client._gpt_try_jsonl") as history):
+            result = fetch_gpt_weekly_usage()
+        self.assertIs(result["data"], live)
+        cookie.assert_not_called()
+        history.assert_not_called()
+
     def test_transient_status_is_retried_once(self):
         from unittest.mock import Mock, patch
         from api_client import _gpt_get
@@ -445,7 +543,7 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             sessions = codex_dir / "sessions"
             sessions.mkdir()
             jsonl_path = sessions / "rollout-2026.jsonl"
-            entry = {"payload": {"rate_limits": [{"window": "weekly", "used_percent": 88.0}]}}
+            entry = {"timestamp": "2026-10-29T09:00:00Z", "payload": {"rate_limits": [{"window": "weekly", "used_percent": 88.0}]}}
             jsonl_path.write_text(json.dumps(entry), encoding="utf-8")
             with (patch("api_client._gpt_try_local_auth", return_value=None),
                 patch("api_client._gpt_try_session_cookie", return_value=None),
@@ -470,7 +568,7 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             sessions.mkdir()
             jsonl_path = sessions / "rollout-2026.jsonl"
             # rate_limits as dict object (not list)
-            entry = {"payload": {"rate_limits": {
+            entry = {"timestamp": "2026-10-29T09:00:00Z", "payload": {"rate_limits": {
                 "primary": {"used_percent": 62, "window_minutes": 10080, "resets_at": 1792472967},
                 "secondary": None,
             }}}

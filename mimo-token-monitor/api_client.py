@@ -3,6 +3,7 @@ import requests
 import json as _json
 import math as _math
 import pathlib as _pl
+from datetime import datetime as _datetime
 
 # 确保打包后 requests 也能找到 CA 证书
 if "SSL_CERT_FILE" not in os.environ:
@@ -393,6 +394,8 @@ def fetch_gpt_weekly_usage(session_cookie=""):
         try:
             result = method(**kwargs)
             if result is not None:
+                if result.get("source") == "local_jsonl":
+                    result["source_errors"] = list(errors)
                 return {"ok": True, "data": result, "error": None}
         except requests.exceptions.Timeout:
             errors.append(f"{source}: 请求超时")
@@ -512,7 +515,7 @@ def _gpt_try_session_cookie(session_cookie="", errors=None):
 
 
 def _gpt_try_jsonl(errors=None):
-    """Try reading secondary window data from local Codex JSONL session files."""
+    """从最近会话中按额度事件时间选择最新完整快照。"""
     home = _pl.Path.home()
     sessions_dir = home / ".codex" / "sessions"
     if not sessions_dir.is_dir():
@@ -524,6 +527,8 @@ def _gpt_try_jsonl(errors=None):
         reverse=True,
     )[:10]
 
+    newest = None
+    newest_time = None
     for jsonl_path in jsonl_files:
         try:
             text = jsonl_path.read_text(encoding="utf-8", errors="replace")
@@ -538,10 +543,20 @@ def _gpt_try_jsonl(errors=None):
                 payload = entry.get("payload") if isinstance(entry, dict) else None
                 if not isinstance(payload, dict):
                     continue
+                timestamp = entry.get("timestamp")
+                try:
+                    observed = _datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                if observed.tzinfo is None:
+                    continue
                 parsed = _gpt_result_with_windows(payload, "local_jsonl")
-                if parsed is not None:
-                    return parsed
+                if parsed is not None and (newest_time is None or observed > newest_time):
+                    parsed["observed_at"] = timestamp
+                    newest, newest_time = parsed, observed
         except Exception:
             continue
 
-    return _gpt_failure(errors, "本地会话", "最近 10 个会话没有周限额记录")
+    if newest is not None:
+        return newest
+    return _gpt_failure(errors, "本地会话", "最近 10 个会话没有带有效时间的周限额记录")

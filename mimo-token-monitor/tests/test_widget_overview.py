@@ -1110,6 +1110,55 @@ class TestThirdPartyCallbackExtraction(unittest.TestCase):
 
 
 class TestGPTCallback(unittest.TestCase):
+    def test_historical_fallback_never_moves_data_time_backwards(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        current_time = datetime(2026, 10, 29, 13, 0)
+        current_data = {"used_percent": 30.0}
+        class FixedClock(datetime):
+            @classmethod
+            def now(cls):
+                return current_time
+        with patch("widget.datetime", FixedClock):
+            w._on_gpt_fetch_done({"ok": True, "data": current_data})
+        for observed_at in ("2026-10-29T12:00:00", "2026-10-29T13:00:00", "invalid"):
+            w._on_gpt_fetch_done({"ok": True, "data": {
+                "source": "local_jsonl", "observed_at": observed_at,
+                "used_percent": 90.0, "source_errors": ["本机 Codex 登录: 请求超时"],
+            }})
+            self.assertIs(w._gpt_data, current_data)
+            self.assertEqual(w._gpt_data_time, current_time)
+            self.assertIn("数据已过期", w.toolTip())
+            self.assertIn("请求超时", w.toolTip())
+        self.assertIn("GPT 数据时间: 2026-10-29 13:00:00", w.toolTip())
+        w.close()
+
+    def test_newer_history_is_accepted_with_warning_and_live_recovers(self):
+        w = _make_widget(display_mode=OVERVIEW_MODE)
+        history = {"source": "local_jsonl", "observed_at": "2026-10-29T13:00:00",
+                   "used_percent": 90.0, "source_errors": ["ChatGPT Cookie: HTTP 503"]}
+        w._on_gpt_fetch_done({"ok": True, "data": history})
+        self.assertIs(w._gpt_data, history)
+        self.assertEqual(w._gpt_data_time, datetime(2026, 10, 29, 13, 0))
+        self.assertIn("本地历史数据", w.toolTip())
+        self.assertIn("HTTP 503", w.toolTip())
+        newer_history = {**history, "observed_at": "2026-10-29T13:01:00"}
+        w._on_gpt_fetch_done({"ok": True, "data": newer_history})
+        self.assertIs(w._gpt_data, newer_history)
+        live = {"source": "codex", "used_percent": 20.0}
+        class FixedClock(datetime):
+            @classmethod
+            def now(cls):
+                return datetime(2026, 10, 29, 13, 2)
+        with patch("widget.datetime", FixedClock):
+            w._on_gpt_fetch_done({"ok": True, "data": live})
+        self.assertIs(w._gpt_data, live)
+        self.assertEqual(w._gpt_data_time, datetime(2026, 10, 29, 13, 2))
+        self.assertEqual(w._gpt_error, "")
+        self.assertNotIn("HTTP 503", w.toolTip())
+        w._on_gpt_fetch_done({"ok": False, "error": "请求超时"})
+        self.assertEqual(w._gpt_data_time, datetime(2026, 10, 29, 13, 2))
+        w.close()
+
     def test_overview_tooltip_shows_both_gpt_windows(self):
         w = _make_widget(display_mode=OVERVIEW_MODE)
         w._gpt_data = {
@@ -1215,7 +1264,7 @@ class TestOverviewRenderSmoke(unittest.TestCase):
 
         painted_texts = [call.args[-1] for call in painter.drawText.call_args_list]
         self.assertIn("WLB 请求失败", painted_texts)
-        self.assertIn("更新于 12:00:00", painted_texts)
+        self.assertIn("检查于 12:00:00", painted_texts)
         w.close()
 
 

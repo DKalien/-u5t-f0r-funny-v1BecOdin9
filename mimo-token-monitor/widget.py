@@ -642,6 +642,7 @@ class TokenWidget(QWidget):
         self._tp_error = ""
         # GPT weekly usage state
         self._gpt_data: dict | None = None
+        self._gpt_data_time: datetime | None = None
         self._gpt_error = ""
         self._supergpt_balance: dict | None = None
         self._supergpt_error = ""
@@ -880,6 +881,8 @@ class TokenWidget(QWidget):
         primary_pct = _window_used_percent(gpt_primary)
         lines.append(f"GPT 5\u5c0f\u65f6剩余: {self._format_overview_percent(primary_pct, has_gpt)}")
         lines.append(f"GPT \u5468\u9650\u989d剩余: {self._format_overview_percent(gpt_pct, has_gpt)}")
+        if self._gpt_data_time is not None:
+            lines.append(f"GPT 数据时间: {self._gpt_data_time:%Y-%m-%d %H:%M:%S}")
         return lines
 
     @staticmethod
@@ -1429,7 +1432,7 @@ class TokenWidget(QWidget):
         """Paint a persistent update time plus an optional elided error."""
         font_tiny = QFont("Microsoft YaHei", 7)
         p.setFont(font_tiny)
-        update_text = f"更新于 {self._last_update}"
+        update_text = f"检查于 {self._last_update}"
         update_x = max(16, self.width() - 16 - p.fontMetrics().horizontalAdvance(update_text))
         status_text = self._router_status or self._last_error
         if status_text:
@@ -2031,8 +2034,24 @@ class TokenWidget(QWidget):
         if self._exit_requested:
             return
         if result.get("ok"):
-            self._gpt_data = result.get("data")
-            self._gpt_error = ""
+            data = result.get("data")
+            if isinstance(data, dict) and data.get("source") == "local_jsonl":
+                observed_at = _parse_reset_datetime(data.get("observed_at"))
+                if observed_at is not None and (
+                    self._gpt_data_time is None or observed_at > self._gpt_data_time
+                ):
+                    self._gpt_data = data
+                    self._gpt_data_time = observed_at
+                details = "；".join(str(error) for error in data.get("source_errors", []) if error)
+                self._gpt_error = "实时查询失败，数据已过期，显示本地历史数据或上次数据"
+                if observed_at is None:
+                    self._gpt_error += "；本地历史数据时间无效"
+                if details:
+                    self._gpt_error += f"：{details}"
+            else:
+                self._gpt_data = data
+                self._gpt_data_time = datetime.now()
+                self._gpt_error = ""
         else:
             detail = result.get("error", "GPT \u7528\u91cf\u67e5\u8be2\u5931\u8d25")
             self._gpt_error = (
