@@ -1,9 +1,12 @@
 import os
+import atexit
+import threading
 import requests
 import json as _json
 import math as _math
 import pathlib as _pl
 from datetime import datetime as _datetime
+import gpt_browser
 
 # 确保打包后 requests 也能找到 CA 证书
 if "SSL_CERT_FILE" not in os.environ:
@@ -258,18 +261,41 @@ GPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 GPT_AUTH_SESSION_URL = "https://chatgpt.com/api/auth/session"
 GPT_PRIMARY_WINDOW_SECONDS = 5 * 60 * 60
 GPT_WEEKLY_WINDOW_SECONDS = 7 * 24 * 60 * 60
+_GPT_SESSION = requests.Session()
+_GPT_SESSION_LOCK = threading.Lock()
+atexit.register(_GPT_SESSION.close)
+
+
+class GPTQueryError(RuntimeError):
+    """仅携带脱敏后的 GPT 查询失败原因。"""
 
 
 def _gpt_get(url: str, headers: dict):
-    """对幂等的 GPT 用量请求重试一次瞬时失败。"""
+    """重试瞬时失败，网络仍失败时改用隔离 Chromium 查询。"""
     for attempt in range(2):
         try:
-            response = requests.get(url, headers=headers, timeout=15)
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-            if attempt:
-                raise
-            continue
+            with _GPT_SESSION_LOCK:
+                _GPT_SESSION.cookies.clear()
+                try:
+                    response = _GPT_SESSION.get(url, headers=headers, timeout=15, allow_redirects=False)
+                finally:
+                    _GPT_SESSION.cookies.clear()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            if not attempt:
+                continue
+            try:
+                return gpt_browser.fetch_gpt_response(url, headers)
+            except requests.exceptions.RequestException:
+                reason = {
+                    "ProxyError": "代理连接失败",
+                    "SSLError": "TLS 连接失败",
+                    "ConnectTimeout": "连接超时",
+                    "ReadTimeout": "读取响应超时",
+                    "Timeout": "请求超时",
+                }.get(type(exc).__name__, "网络连接失败")
+                raise GPTQueryError(f"{reason}；Chromium 兜底查询也未成功") from None
         if attempt == 0 and (response.status_code == 429 or response.status_code >= 500):
+            response.close()
             continue
         return response
 
@@ -397,6 +423,8 @@ def fetch_gpt_weekly_usage(session_cookie=""):
                 if result.get("source") == "local_jsonl":
                     result["source_errors"] = list(errors)
                 return {"ok": True, "data": result, "error": None}
+        except GPTQueryError as exc:
+            errors.append(f"{source}: {exc}")
         except requests.exceptions.Timeout:
             errors.append(f"{source}: 请求超时")
         except requests.exceptions.ConnectionError:
@@ -453,11 +481,13 @@ def _gpt_try_local_auth(errors=None):
         hdrs["ChatGPT-Account-ID"] = account_id
 
     resp = _gpt_get(GPT_USAGE_URL, hdrs)
-    if resp.status_code != 200:
-        reason = "登录已失效" if resp.status_code in {401, 403} else "用量接口请求失败"
-        return _gpt_failure(errors, "本机 Codex 登录", f"{reason}（HTTP {resp.status_code}）")
-
-    data = resp.json()
+    try:
+        if resp.status_code != 200:
+            reason = "登录已失效" if resp.status_code in {401, 403} else "用量接口请求失败"
+            return _gpt_failure(errors, "本机 Codex 登录", f"{reason}（HTTP {resp.status_code}）")
+        data = resp.json()
+    finally:
+        resp.close()
     parsed = _gpt_result_with_windows(data, "local_codex_auth")
     if parsed is None:
         return _gpt_failure(errors, "本机 Codex 登录", "响应中没有 7 天额度窗口")
@@ -476,11 +506,13 @@ def _gpt_try_session_cookie(session_cookie="", errors=None):
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0",
         },
     )
-    if resp.status_code != 200:
-        reason = "已失效" if resp.status_code in {401, 403} else "登录接口请求失败"
-        return _gpt_failure(errors, "ChatGPT Cookie", f"{reason}（HTTP {resp.status_code}）")
-
-    auth_data = resp.json()
+    try:
+        if resp.status_code != 200:
+            reason = "已失效" if resp.status_code in {401, 403} else "登录接口请求失败"
+            return _gpt_failure(errors, "ChatGPT Cookie", f"{reason}（HTTP {resp.status_code}）")
+        auth_data = resp.json()
+    finally:
+        resp.close()
     if not isinstance(auth_data, dict):
         return None
 
@@ -502,11 +534,13 @@ def _gpt_try_session_cookie(session_cookie="", errors=None):
         hdrs["ChatGPT-Account-ID"] = account_id
 
     resp2 = _gpt_get(GPT_USAGE_URL, hdrs)
-    if resp2.status_code != 200:
-        reason = "登录已失效" if resp2.status_code in {401, 403} else "用量接口请求失败"
-        return _gpt_failure(errors, "ChatGPT Cookie", f"{reason}（HTTP {resp2.status_code}）")
-
-    data = resp2.json()
+    try:
+        if resp2.status_code != 200:
+            reason = "登录已失效" if resp2.status_code in {401, 403} else "用量接口请求失败"
+            return _gpt_failure(errors, "ChatGPT Cookie", f"{reason}（HTTP {resp2.status_code}）")
+        data = resp2.json()
+    finally:
+        resp2.close()
     parsed = _gpt_result_with_windows(data, "session_cookie")
     if parsed is None:
         return _gpt_failure(errors, "ChatGPT Cookie", "响应中没有 7 天额度窗口")

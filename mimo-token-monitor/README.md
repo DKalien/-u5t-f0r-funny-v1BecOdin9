@@ -128,6 +128,8 @@ Playwright 不能延长服务端设置的 Cookie 有效期。
 
 本地兜底会扫描最近修改的 10 个会话文件，按额度事件自身的时间选择最新快照；缺少有效带时区时间的记录不采用。历史快照只有比当前显示的数据更新时才替换，且始终标明实时查询失败、数据已过期，并保留失败来源。悬停可查看 GPT 数据的实际时间，实时查询恢复后自动清除警告。底部“检查于”表示最近检查时间，不能用来判断各项数据是否更新成功。
 
+GPT 实时请求沿用系统或环境代理，使用独立的 Requests 会话复用连接，减少每次刷新重新建立代理/TLS 连接的开销；跨工作线程串行访问，每次请求前后清空会话 Cookie，认证信息仅通过本次请求头传递。Python 请求最多尝试两次，最后一次遇到连接或超时错误时，会使用已有的 Playwright/Chromium 在隔离的无头浏览器中查询同一接口；正常查询不启动浏览器，HTTP 认证、限流及服务端错误仍按原规则处理。浏览器兜底仅向指定接口发送一次请求，不跟随重定向，不使用现有浏览器或 MiMo 登录资料；查询完成后关闭浏览器。需已安装 Playwright 和 Chromium（`python -m playwright install chromium`）；不可用时可使用符合条件的本地历史数据，并显示过期提示。两种传输都失败时，tooltip 会显示安全分类后的网络原因，便于排查代理、TLS 或超时问题。源码更新后需重启悬浮窗才能生效。
+
 ### 构建轻量启动器 EXE
 
 ```powershell
@@ -293,4 +295,4 @@ python -m PyInstaller MiMo-Token-Monitor.spec --clean
 - MiMo / ChatGPT Cookie 和 WLB API Key 等明文存储在外置 SQLite 数据库（默认 `D:\python\data\mimo-token-monitor\settings.db`）；外置库不可用时可回退到旧 JSON（`~/.mimo-widget/config.json`）
 - MiMo 请求发往 `platform.xiaomimimo.com`；启用 WLB 后，会按配置向第三方 Base URL 发送带 Bearer API Key 的用量请求
 - SuperGPT 密钥仅从环境变量或 Router 的受保护 `supergpt-api-key.secret` 读取，不复制进 SQLite、快照或日志；总览页向 `https://api.supergpt.dev/v1/usage` 发送带 Bearer API Key 的余额请求，不跟随重定向，未配置密钥时不请求
-- GPT 5 小时/周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源
+- GPT 5 小时/周限额查询会优先使用本机 Codex 登录访问 `chatgpt.com`；也可能读取已配置的 ChatGPT Session Cookie 或本地 Codex 会话记录作为备用来源。浏览器兜底使用隔离的临时会话，不读取现有浏览器或 MiMo 登录资料

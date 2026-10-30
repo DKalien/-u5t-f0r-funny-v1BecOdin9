@@ -436,15 +436,123 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
         cookie.assert_not_called()
         history.assert_not_called()
 
+    def test_gpt_session_reused_and_cookies_cleared(self):
+        import api_client
+        session = api_client._GPT_SESSION
+        headers = {"Cookie": "explicit=one"}
+        seen = []
+
+        def get(url, **kwargs):
+            seen.append((api_client._GPT_SESSION, dict(session.cookies), url, kwargs))
+            session.cookies.set("response-cookie", "secret")
+            return Mock(status_code=200)
+
+        session.cookies.set("stale", "secret")
+        with patch.object(session, "get", side_effect=get):
+            api_client._gpt_get("https://example.test/one", headers)
+            api_client._gpt_get("https://example.test/two", headers)
+        self.assertEqual([entry[0] for entry in seen], [session, session])
+        self.assertEqual([entry[1] for entry in seen], [{}, {}])
+        self.assertEqual(seen[0][3], {"headers": headers, "timeout": 15, "allow_redirects": False})
+        self.assertEqual(dict(session.cookies), {})
+
+    def test_gpt_session_access_is_serialized(self):
+        import concurrent.futures
+        import threading
+        import time
+        import api_client
+
+        active = 0
+        peak = 0
+        guard = threading.Lock()
+        def get(url, **kwargs):
+            nonlocal active, peak
+            with guard:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.03)
+            with guard:
+                active -= 1
+            return Mock(status_code=200)
+
+        with patch.object(api_client._GPT_SESSION, "get", side_effect=get):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(lambda _: api_client._gpt_get("https://example.test", {}), range(4)))
+        self.assertEqual(peak, 1)
+
+    def test_gpt_session_cookies_cleared_on_network_failure(self):
+        import api_client
+        import requests
+        session = api_client._GPT_SESSION
+        def fail(*args, **kwargs):
+            self.assertEqual(dict(session.cookies), {})
+            session.cookies.set("response-cookie", "secret")
+            raise requests.exceptions.ConnectionError()
+        with (patch.object(session, "get", side_effect=fail),
+              patch("api_client.gpt_browser.fetch_gpt_response", return_value=Mock(status_code=200))):
+            api_client._gpt_get("https://example.test", {})
+        self.assertEqual(dict(session.cookies), {})
+
     def test_transient_status_is_retried_once(self):
         from unittest.mock import Mock, patch
         from api_client import _gpt_get
         unavailable = Mock(status_code=503)
         success = Mock(status_code=200)
-        with patch("api_client.requests.get", side_effect=[unavailable, success]) as get:
+        with patch("api_client._GPT_SESSION.get", side_effect=[unavailable, success]) as get:
             result = _gpt_get("https://example.test", {})
         self.assertIs(result, success)
         self.assertEqual(get.call_count, 2)
+        unavailable.close.assert_called_once()
+
+    def test_network_failure_uses_browser_with_same_authentication(self):
+        import requests
+        from api_client import _gpt_get, GPT_USAGE_URL
+        headers = {"Authorization": "Bearer test-token", "ChatGPT-Account-ID": "test-account"}
+        browser_response = Mock(status_code=200)
+        with (patch("api_client._GPT_SESSION.get", side_effect=requests.exceptions.ProxyError("test-secret")) as get,
+              patch("api_client.gpt_browser.fetch_gpt_response", return_value=browser_response) as browser):
+            result = _gpt_get(GPT_USAGE_URL, headers)
+        self.assertIs(result, browser_response)
+        self.assertEqual(get.call_count, 2)
+        get.assert_called_with(GPT_USAGE_URL, headers=headers, timeout=15, allow_redirects=False)
+        browser.assert_called_once_with(GPT_USAGE_URL, headers)
+
+    def test_http_responses_do_not_start_browser(self):
+        from api_client import _gpt_get, GPT_USAGE_URL
+        for status in (200, 302, 401, 403, 429, 503):
+            with self.subTest(status=status):
+                responses = [Mock(status_code=status), Mock(status_code=status)]
+                with (patch("api_client._GPT_SESSION.get", side_effect=responses) as get,
+                      patch("api_client.gpt_browser.fetch_gpt_response") as browser):
+                    result = _gpt_get(GPT_USAGE_URL, {})
+                self.assertEqual(result.status_code, status)
+                self.assertEqual(get.call_count, 2 if status in (429, 503) else 1)
+                browser.assert_not_called()
+
+    def test_both_network_clients_fail_with_safe_source_reason(self):
+        import requests
+        from api_client import fetch_gpt_weekly_usage
+        cases = (
+            (requests.exceptions.ProxyError, "代理连接失败"),
+            (requests.exceptions.SSLError, "TLS 连接失败"),
+            (requests.exceptions.ConnectTimeout, "连接超时"),
+            (requests.exceptions.ReadTimeout, "读取响应超时"),
+        )
+        for error_type, expected in cases:
+            with self.subTest(error_type=error_type):
+                def auth(errors):
+                    from api_client import _gpt_get, GPT_USAGE_URL
+                    return _gpt_get(GPT_USAGE_URL, {})
+                with (patch("api_client._gpt_try_local_auth", side_effect=auth),
+                      patch("api_client._gpt_try_jsonl", return_value=None),
+                      patch("api_client._GPT_SESSION.get", side_effect=error_type("test-secret")),
+                      patch("api_client.gpt_browser.fetch_gpt_response",
+                            side_effect=requests.exceptions.RequestException("test-secret"))):
+                    result = fetch_gpt_weekly_usage()
+                self.assertFalse(result["ok"])
+                self.assertIn(expected, result["error"])
+                self.assertIn("Chromium 兜底查询也未成功", result["error"])
+                self.assertNotIn("test-secret", result["error"])
 
     def test_session_cookie_uses_get(self):
         from unittest.mock import patch, Mock
@@ -458,7 +566,7 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             calls.append(url)
             return auth_resp if url == GPT_AUTH_SESSION_URL else usage_resp
         with (patch("api_client._gpt_try_local_auth", return_value=None),
-            patch("api_client.requests.get", side_effect=track_get)):
+            patch("api_client._GPT_SESSION.get", side_effect=track_get)):
             result = fetch_gpt_weekly_usage(session_cookie="cookie")
         self.assertTrue(result["ok"])
         self.assertEqual(len(calls), 2)
@@ -473,7 +581,7 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
         usage_data = {"rate_limits": [{"window": "weekly", "used_percent": 55.0}]}
         usage_resp = Mock(status_code=200)
         usage_resp.json.return_value = usage_data
-        with (patch("api_client.requests.get", side_effect=[auth_resp, usage_resp]),
+        with (patch("api_client._GPT_SESSION.get", side_effect=[auth_resp, usage_resp]),
             patch("api_client._gpt_try_local_auth", return_value=None)):
             result = fetch_gpt_weekly_usage(session_cookie="sess_token=abc")
         self.assertTrue(result["ok"])
@@ -497,7 +605,7 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             (auth_dir / "auth.json").write_text(json.dumps(auth), encoding="utf-8")
             with (
                 patch("api_client._pl.Path.home", return_value=pathlib.Path(td)) as _ph,
-                patch("api_client.requests.get", return_value=usage_resp) as mock_get,
+                patch("api_client._GPT_SESSION.get", return_value=usage_resp) as mock_get,
             ):
                 result = _gpt_try_local_auth()
             self.assertIsNotNone(result)
@@ -576,7 +684,8 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             (codex_dir / "auth.json").write_text(
                 json.dumps({"tokens": {"access_token": "test-token"}}), encoding="utf-8"
             )
-            with (patch("api_client.requests.get", side_effect=requests.exceptions.ConnectionError) as get,
+            with (patch("api_client._GPT_SESSION.get", side_effect=requests.exceptions.ConnectionError) as get,
+                patch("api_client.gpt_browser.fetch_gpt_response", side_effect=requests.exceptions.RequestException),
                 patch("api_client._pl.Path.home", return_value=pathlib.Path(td))):
                 result = fetch_gpt_weekly_usage(session_cookie="test-cookie")
             self.assertTrue(result["ok"])
@@ -599,7 +708,7 @@ class TestFetchGPTWeeklyUsage(unittest.TestCase):
             (auth_dir / "auth.json").write_text(json.dumps({"tokens": {"access_token": "tok"}}), encoding="utf-8")
             resp = Mock(status_code=403)
             with (patch("api_client._pl.Path.home", return_value=pathlib.Path(td)),
-                patch("api_client.requests.get", return_value=resp)):
+                patch("api_client._GPT_SESSION.get", return_value=resp)):
                 result = _gpt_try_local_auth()
             self.assertIsNone(result)
 
